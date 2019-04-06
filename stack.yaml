@@ -1,0 +1,32 @@
+resolver: nightly-2019-03-14
+
+flags:
+  Taiji-scRNA-seq:
+    exe: true
+
+packages:
+- '.'
+
+extra-deps:
+
+- git:     https://github.com/Taiji-pipeline/Taiji-RNA-seq.git
+  commit:  94c3de1a5e13e048d7cc5d53cc0295ca395ac1e7
+
+- git:     https://github.com/Taiji-pipeline/bio-pipelines.git
+  commit:  bd10c445832a3f3bdf82b57ddf1224397b78390b
+
+- git:     https://github.com/Taiji-pipeline/bio-experiments.git
+  commit:  3157224ccebae6b3ce26185a85b8093494878ed4
+
+- git:     https://github.com/kaizhang/haskell-igraph.git
+  commit:  e9db8aad4ca005257a464a5eff0e5ff15aa761b2
+
+- git:     https://github.com/kaizhang/bioinformatics-toolkit.git
+  commit:  d1ce0f73c04c77edd674cad92904789f5fd46409
+  subdirs: 
+    - bioinformatics-toolkit
+
+- HsHTSLib-1.9.2
+- drmaa-0.2.0
+- clustering-0.4.1
+- SciFlow-0.6.2

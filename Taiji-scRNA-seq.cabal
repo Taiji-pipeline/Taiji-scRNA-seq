@@ -1,0 +1,73 @@
+name:                Taiji-scRNA-seq
+version:             0.1.0
+homepage:            https://github.com/githubuser/Taiji-RNA-seq#readme
+license:             MIT
+license-file:        LICENSE
+author:              Kai Zhang
+maintainer:          kai@kzhang.org
+copyright:           (c) 2017-2019 Kai Zhang
+category:            Bio
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+Flag exe
+  Description: Build executable
+  Default:     False
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Taiji.Pipeline.SC.DropSeq
+                       Taiji.Pipeline.SC.DropSeq.Functions
+                       Taiji.Pipeline.SC.DropSeq.Config
+
+  build-depends:       base >= 4.7 && < 5
+                     , bytestring
+                     , bio-pipelines
+                     , bio-experiments
+                     , bioinformatics-toolkit >= 0.6.0
+                     , case-insensitive
+                     , conduit
+                     , conduit-extra
+                     , containers
+                     , cereal
+                     , matrices
+                     , double-conversion
+                     , data-ordlist
+                     , haskell-igraph >= 0.7.0
+                     , HsHTSLib
+                     , IntervalMap
+                     , lens
+                     , mtl
+                     , singletons >= 2.5
+                     , shelly
+                     , SciFlow >= 0.6.2
+                     , temporary
+                     , text
+                     , unordered-containers
+                     , Taiji-RNA-seq
+  default-language:    Haskell2010
+  ghc-options:       -Wall
+                     -fno-warn-unticked-promoted-constructors
+                     -fno-warn-partial-type-signatures
+
+executable taiji-scrna-seq
+  hs-source-dirs:      app
+  if flag(exe)
+    buildable: True
+  else
+    buildable: False
+  main-is:             Main.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , Taiji-scRNA-seq
+                     , lens
+                     , aeson
+                     , bio-pipelines
+                     , SciFlow >= 0.6.2
+                     , data-default
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/githubuser/Taiji-RNA-seq
