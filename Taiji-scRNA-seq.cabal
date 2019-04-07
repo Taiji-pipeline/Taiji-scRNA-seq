@@ -19,7 +19,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Taiji.Pipeline.SC.DropSeq
                        Taiji.Pipeline.SC.DropSeq.Functions
-                       Taiji.Pipeline.SC.DropSeq.Config
+                       Taiji.Pipeline.SC.DropSeq.Types
 
   build-depends:       base >= 4.7 && < 5
                      , bytestring

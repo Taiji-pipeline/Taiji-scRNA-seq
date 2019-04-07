@@ -65,6 +65,7 @@ extractBarcode input = input & replicates.traverse.files %%~ fun
 getWhiteList :: FilePath -> FilePath -> IO ()
 getWhiteList input output = shelly $ escaping False $ run_ "umi_tools"
     [ "whitelist", "--stdin", T.pack input
+    , "--plot-prefix=" <> T.init (fst $ T.breakOnEnd "." $ T.pack output)
     , "--bc-pattern=CCCCCCCCCCCCNNNNNNNN"
     , "--log2stderr", ">", T.pack output ]
 
