@@ -14,18 +14,13 @@ import           Control.Monad.Reader                    (asks)
 import           Data.Either
 import           Scientific.Workflow
 
-import           Taiji.Pipeline.SC.DropSeq.Config
+import           Taiji.Pipeline.SC.DropSeq.Types
 import           Taiji.Pipeline.SC.DropSeq.Functions
 import           Taiji.Pipeline.RNASeq.Functions (rnaGetFastq)
 
 builder :: Builder ()
 builder = do
-    nodeS "Read_Input" [| \_ -> do
-        input <- asks _dropSeq_input
-        liftIO $ if ".tsv" == reverse (take 4 $ reverse input)
-            then readRNASeqTSV input "Drop-seq"
-            else readRNASeq input "Drop-seq"
-        |] $ submitToRemote .= Just False
+    nodeS "Read_Input" 'readInput $ submitToRemote .= Just False
 
     node' "Get_Fastq" [|
         map (\x -> x & replicates.mapped.files %~ fromRight undefined) .

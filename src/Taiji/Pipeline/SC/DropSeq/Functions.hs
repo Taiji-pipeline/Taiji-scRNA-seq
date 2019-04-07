@@ -7,7 +7,8 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Taiji.Pipeline.SC.DropSeq.Functions
-    ( extractBarcode
+    ( readInput
+    , extractBarcode
     , mkIndex
     , tagAlign
     , filterBamFile
@@ -17,6 +18,8 @@ module Taiji.Pipeline.SC.DropSeq.Functions
 import           Bio.Data.Bam
 import           Bio.Data.Bed
 import           Bio.Data.Experiment
+import           Bio.Data.Experiment.Types
+import           Bio.Data.Experiment.Parser
 import           Bio.Pipeline.NGS.STAR
 import           Bio.Pipeline.NGS.Utils
 import           Bio.Pipeline.Utils
@@ -40,7 +43,15 @@ import           Scientific.Workflow
 import Shelly hiding (FilePath)
 import           Text.Printf                          (printf)
 
-import           Taiji.Pipeline.SC.DropSeq.Config
+import           Taiji.Pipeline.SC.DropSeq.Types
+
+type RAWInput = RNASeq N [Either SomeFile (SomeFile, SomeFile)]
+
+readInput :: DropSeqConfig config
+          => () -> WorkflowConfig config [RAWInput]
+readInput _ = do
+    input <- asks _dropseq_input 
+    liftIO $ simpleInputReader input "dropseq-seq" RNASeq
 
 extractBarcode :: DropSeqConfig config
                => RNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)
@@ -48,7 +59,7 @@ extractBarcode :: DropSeqConfig config
 extractBarcode input = input & replicates.traverse.files %%~ fun
   where
     fun (flRead1, flRead2) = do
-        outdir <- asks _dropSeq_output_dir >>= getPath
+        outdir <- asks _dropseq_output_dir >>= getPath
         liftIO $ do
             shelly $ test_px "umi_tools" >>= \case
                 True -> return ()
@@ -87,9 +98,10 @@ mkIndex :: DropSeqConfig config => [a] -> WorkflowConfig config [a]
 mkIndex input
     | null input = return input
     | otherwise = do
-        genome <- asks _dropSeq_genome_fasta
-        starIndex <- asks _dropSeq_star_index
-        anno <- asks _dropSeq_annotation
+        genome <- fromMaybe (error "genome fasta not found") <$>
+            asks _dropseq_genome_fasta
+        starIndex <- asks _dropseq_star_index
+        anno <- asks _dropseq_annotation
         liftIO $ do
             _ <- starMkIndex "STAR" starIndex [genome] anno 100
             return input
@@ -98,8 +110,8 @@ tagAlign :: DropSeqConfig config
          => RNASeq S (File '[Gzip] 'Fastq)
          -> WorkflowConfig config (RNASeq S (File '[] 'Bam))
 tagAlign input = do
-    dir <- asks _dropSeq_output_dir >>= getPath
-    idx <- asks _dropSeq_star_index
+    dir <- asks _dropseq_output_dir >>= getPath
+    idx <- asks _dropseq_star_index
     let outputGenome = printf "%s/%s_rep%d_genome.bam" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
         f fl = starAlign outputGenome idx (Left fl) opt >>=
@@ -113,7 +125,7 @@ filterBamFile :: DropSeqConfig config
               => RNASeq S (File '[] 'Bam)
               -> WorkflowConfig config (RNASeq S (File '[] 'Bam))
 filterBamFile input = do
-    dir <- asks _dropSeq_output_dir >>= getPath
+    dir <- asks _dropseq_output_dir >>= getPath
     let output = printf "%s/%s_rep%d_filt.bam" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
     input & replicates.traverse.files %%~ liftIO . ( \fl ->
@@ -123,10 +135,10 @@ quantification :: DropSeqConfig config
                => RNASeq S (File tags 'Bam)
                -> WorkflowConfig config (RNASeq S (File '[] 'Tsv))
 quantification input = do
-    dir <- asks ((<> "/Quantification/") . _dropSeq_output_dir) >>= getPath
+    dir <- asks ((<> "/Quantification/") . _dropseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_quant.tsv" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
-    anno_f <- asks _dropSeq_annotation
+    anno_f <- asks _dropseq_annotation
     genes <- liftIO $ readGenes anno_f
     let annotation = bedToTree (++) $ map (\Gene{..} ->
             (asBed geneChrom geneLeft geneRight :: BED3, [original geneName])) genes
