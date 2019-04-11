@@ -14,6 +14,7 @@ import           GHC.Generics                  (Generic)
 import           Scientific.Workflow
 
 import qualified Taiji.Pipeline.SC.DropSeq as DropSeq
+import Taiji.Pipeline.SC.DropSeq.Types (DropSeqConfig(..))
 
 data RNASeqOpts = RNASeqOpts
     { output_dir     :: Directory
@@ -22,8 +23,8 @@ data RNASeqOpts = RNASeqOpts
     , genome         :: Maybe FilePath
     , input          :: FilePath
     , annotation     :: Maybe FilePath
-    , cellBarcodeLen :: Int
-    , molBarcodeLen  :: Int
+    , barcode_length :: Int
+    , umi_length :: Int
     } deriving (Generic)
 
 instance FromJSON RNASeqOpts
@@ -37,18 +38,18 @@ instance Default RNASeqOpts where
         , genome = Nothing
         , input = "input.yml"
         , annotation = Nothing
-        , cellBarcodeLen = 12
-        , molBarcodeLen = 8
+        , barcode_length = 12
+        , umi_length = 8
         }
 
-instance DropSeq.DropSeqConfig RNASeqOpts where
-    _dropSeq_input = input
-    _dropSeq_output_dir = output_dir
-    _dropSeq_cell_barcode_length = cellBarcodeLen
-    _dropSeq_molecular_barcode_length = molBarcodeLen
-    _dropSeq_star_index = fromJust . star_index
-    _dropSeq_annotation = fromJust . annotation
-    _dropSeq_genome_fasta = fromJust . genome
+instance DropSeqConfig RNASeqOpts where
+    _dropseq_input = input
+    _dropseq_output_dir = output_dir
+    _dropseq_cell_barcode_length = barcode_length
+    _dropseq_molecular_barcode_length = umi_length
+    _dropseq_star_index = fromJust . star_index
+    _dropseq_annotation = fromJust . annotation
+    _dropseq_genome_fasta = genome
 
 mainWith defaultMainOpts
     { programHeader = "Taiji-RNA-Seq"
