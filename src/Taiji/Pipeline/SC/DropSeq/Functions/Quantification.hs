@@ -50,21 +50,23 @@ quantification input = do
     let output = printf "%s/%s_rep%d_quant.tsv" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
     anno_f <- asks _dropseq_annotation
-    exons <- liftIO $ mkExonTree <$> readGenes anno_f
-    anno <- liftIO $ readAnnotations anno_f
+
     input & replicates.traverse.files %%~ liftIO . ( \bam -> do
         hdr <- getBamHeader $ bam^.location
-        idxMap <- runResourceT $ runConduit $ streamBam (bam^.location) .|
-            bamToBedC hdr .| getGeneIdxMap exons
+
+        exons <- mkExonTree <$> readGenes anno_f
+        anno <- readAnnotations anno_f
+        (idxMap, annoCount) <- runResourceT $ runConduit $ streamBam (bam^.location) .|
+            bamToBedC hdr .| zipSinks (getGeneIdxMap exons) (annotate anno)
+
         withFile output WriteMode $ \h -> do
             B.hPutStrLn h $ B.intercalate "\t" $ map fst $
                 sortBy (comparing snd) $ M.toList idxMap 
-            let quant = fmap snd $ mkGeneCount exons idxMap .| zipSinks
-                    (mapC fst .| outputResult h) (mapC snd .| sinkList)
-            (dupRate, annoCount) <- runResourceT $ runConduit $
+            dupRate <- runResourceT $ fmap snd $ runConduit $
                 streamBam (bam^.location) .| bamToBedC hdr .|
-                    groupOnC (fst . getIndex . fromJust . (^.name)) .|
-                    zipSinks quant (concatC .| annotate anno)
+                groupOnC' (fst . getIndex . fromJust . (^.name)) .|
+                mapMC (\x -> runConduit $ x .| mkGeneCount' exons idxMap) .|
+                zipSinks (mapC fst .| outputResult h) (mapC snd .| sinkList)
             return (location .~ output $ emptyFile, dupRate, annoCount)
         )
 
@@ -91,6 +93,29 @@ mkGeneCount exons idxMap = mapC $ \tags ->
     in (sortCount geneCountUniq, dupRate)
   where
     fun bed = zip genes $ repeat [umi]
+      where
+        genes = concat $ IM.elems $ intersecting exons bed
+        (_, umi) = getIndex $ fromJust $ bed^.name
+    sortCount count = U.create $ do
+        vec <- UM.replicate (M.size idxMap) 0
+        forM_ (M.toList count) $ \(g, c) -> do
+            let idx = M.findWithDefault undefined g idxMap
+            UM.write vec idx c
+        return vec
+
+mkGeneCount' :: Monad m
+             => ExonTree
+             -> M.Map B.ByteString Int
+             -> ConduitT BED o m (U.Vector Int, Double)
+mkGeneCount' exons idxMap = do
+    geneCount <- mapC fun .| foldlC combine M.empty
+    let totalUMI = fromIntegral $ foldl' (+) 0 $ fmap (foldl' (+) 0) geneCount
+        uniqUMI = fromIntegral $ foldl' (+) 0 $ fmap M.size geneCount
+        dupRate = 1 - uniqUMI / totalUMI
+    return (sortCount $ fmap M.size geneCount, dupRate)
+  where
+    combine m x = M.unionWith (M.unionWith (+)) m x
+    fun bed = M.fromList $ zip genes $ repeat $ M.singleton umi 1
       where
         genes = concat $ IM.elems $ intersecting exons bed
         (_, umi) = getIndex $ fromJust $ bed^.name
@@ -172,16 +197,14 @@ groupOnC fun = await >>= (maybe (return ()) $ \b -> go (fun b) [b])
           where
             idx' = fun b
 
-            {-
 groupOnC' :: (Monad m, Eq b)
           => (a -> b)
-          -> ConduitT a (ConduitT i a m r) m ()
-groupOnC' fun = await >>= (maybe (return ()) $ \b -> go (fun b) )
+          -> ConduitT a (ConduitT i a m ()) m ()
+groupOnC' fun = await >>= (maybe (return ()) $ \b -> go (fun b) $ yield b)
   where
     go idx acc = await >>= maybe (yield acc) f
       where
-        f b | idx' == idx = go idx $ b : acc 
-            | otherwise = yield acc >> go idx' [b]
+        f b | idx' == idx = go idx (acc >> yield b)
+            | otherwise = yield acc >> go idx' (yield b)
           where
             idx' = fun b
-            -}
