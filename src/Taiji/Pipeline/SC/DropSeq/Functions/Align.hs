@@ -63,6 +63,6 @@ filterBamSort input = do
   where
     fun fl output = withTempFile "./" "tmp_sort." $ \tmp_sort _ ->
         shelly $ escaping False $ silently $ bashPipeFail bash_ "samtools"
-            [ "view", "-F", "4", "-u", T.pack $ fl^.location, "|"
+            [ "view", "-F", "0x70c", "-u", T.pack $ fl^.location, "|"
             ,  "samtools", "sort", "-", "-n", "-T", T.pack tmp_sort
             , "-l", "9", "-o", T.pack output ]

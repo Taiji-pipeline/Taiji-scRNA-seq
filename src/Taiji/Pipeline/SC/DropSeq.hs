@@ -21,5 +21,5 @@ builder = do
     nodePS 1 "Quantification" 'quantification $ return ()
     path ["Extract_Barcode", "Make_Index", "Align", "Filter_Bam", "Quantification"]
 
-    nodeS "Run_QC" 'reportQC $ return ()
+    nodeS "Run_QC" 'reportQC $ submitToRemote .= Just False
     ["Quantification"] ~> "Run_QC"
