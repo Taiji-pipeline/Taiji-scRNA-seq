@@ -23,6 +23,7 @@ library
                        Taiji.Pipeline.SC.DropSeq.Functions.Align
                        Taiji.Pipeline.SC.DropSeq.Functions.Quantification
                        Taiji.Pipeline.SC.DropSeq.Functions.QC
+                       Taiji.Pipeline.SC.DropSeq.Functions.Utils
                        Taiji.Pipeline.SC.DropSeq.Types
 
   build-depends:       base >= 4.7 && < 5

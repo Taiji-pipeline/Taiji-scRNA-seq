@@ -36,6 +36,7 @@ import           Scientific.Workflow
 import           Text.Printf                          (printf)
 
 import           Taiji.Pipeline.SC.DropSeq.Types
+import Taiji.Pipeline.SC.DropSeq.Functions.Utils
 
 type ExonTree = BEDTree [B.ByteString]
 
@@ -64,8 +65,8 @@ quantification input = do
                 sortBy (comparing snd) $ M.toList idxMap 
             dupRate <- runResourceT $ fmap snd $ runConduit $
                 streamBam (bam^.location) .| bamToBedC hdr .|
-                groupOnC' (fst . getIndex . fromJust . (^.name)) .|
-                mapMC (\x -> runConduit $ x .| mkGeneCount' exons idxMap) .|
+                groupOnC (fst . getIndex . fromJust . (^.name)) .|
+                mapMC (\x -> runConduit $ x .| mkGeneCount exons idxMap) .|
                 zipSinks (mapC fst .| outputResult h) (mapC snd .| sinkList)
             return (location .~ output $ emptyFile, dupRate, annoCount)
         )
@@ -79,35 +80,11 @@ getGeneIdxMap exons = do
     f geneSet bed = foldl' (flip S.insert) geneSet $ concat $
         IM.elems $ intersecting exons bed
 
--- | Produce the gene counts
 mkGeneCount :: Monad m
             => ExonTree
             -> M.Map B.ByteString Int
-            -> ConduitT [BED] (U.Vector Int, Double) m ()
-mkGeneCount exons idxMap = mapC $ \tags -> 
-    let geneCount = M.fromListWith (++) $ concatMap fun tags
-        geneCountUniq = fmap (length . nubSort) geneCount
-        totalUMI = fromIntegral $ foldl' (+) 0 $ fmap length geneCount
-        uniqUMI = fromIntegral $ foldl' (+) 0 geneCountUniq
-        dupRate = 1 - uniqUMI / totalUMI
-    in (sortCount geneCountUniq, dupRate)
-  where
-    fun bed = zip genes $ repeat [umi]
-      where
-        genes = concat $ IM.elems $ intersecting exons bed
-        (_, umi) = getIndex $ fromJust $ bed^.name
-    sortCount count = U.create $ do
-        vec <- UM.replicate (M.size idxMap) 0
-        forM_ (M.toList count) $ \(g, c) -> do
-            let idx = M.findWithDefault undefined g idxMap
-            UM.write vec idx c
-        return vec
-
-mkGeneCount' :: Monad m
-             => ExonTree
-             -> M.Map B.ByteString Int
-             -> ConduitT BED o m (U.Vector Int, Double)
-mkGeneCount' exons idxMap = do
+            -> ConduitT BED o m (U.Vector Int, Double)
+mkGeneCount exons idxMap = do
     geneCount <- mapC fun .| foldlC combine M.empty
     let totalUMI = fromIntegral $ foldl' (+) 0 $ fmap (foldl' (+) 0) geneCount
         uniqUMI = fromIntegral $ foldl' (+) 0 $ fmap M.size geneCount
@@ -115,7 +92,7 @@ mkGeneCount' exons idxMap = do
     return (sortCount $ fmap M.size geneCount, dupRate)
   where
     combine m x = M.unionWith (M.unionWith (+)) m x
-    fun bed = M.fromList $ zip genes $ repeat $ M.singleton umi 1
+    fun bed = M.fromList $ zip genes $ repeat $ M.singleton umi (1 :: Int)
       where
         genes = concat $ IM.elems $ intersecting exons bed
         (_, umi) = getIndex $ fromJust $ bed^.name
@@ -176,35 +153,3 @@ mkExonTree genes = bedToTree (++) $ concatMap f genes
   where
     f Gene{..} = map ( \(a,b) ->
         (asBed geneChrom a b :: BED3, [original geneName]) ) geneExon 
-
-
--- | Get barcode and UMI
-getIndex :: B.ByteString -> (B.ByteString, B.ByteString)
-getIndex x = (a,b)
-  where
-    [a,b] = B.split '+' $ head $ B.split '_' x
-{-# INLINE getIndex #-}
-
-groupOnC :: (Monad m, Eq b)
-         => (a -> b)
-         -> ConduitT a [a] m ()
-groupOnC fun = await >>= (maybe (return ()) $ \b -> go (fun b) [b])
-  where
-    go idx acc = await >>= maybe (yield acc) f
-      where
-        f b | idx' == idx = go idx $ b : acc 
-            | otherwise = yield acc >> go idx' [b]
-          where
-            idx' = fun b
-
-groupOnC' :: (Monad m, Eq b)
-          => (a -> b)
-          -> ConduitT a (ConduitT i a m ()) m ()
-groupOnC' fun = await >>= (maybe (return ()) $ \b -> go (fun b) $ yield b)
-  where
-    go idx acc = await >>= maybe (yield acc) f
-      where
-        f b | idx' == idx = go idx (acc >> yield b)
-            | otherwise = yield acc >> go idx' (yield b)
-          where
-            idx' = fun b
