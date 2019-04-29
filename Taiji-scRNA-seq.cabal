@@ -31,7 +31,7 @@ library
                      , bytestring
                      , bio-pipelines
                      , bio-experiments
-                     , bioinformatics-toolkit >= 0.6.0
+                     , bioinformatics-toolkit >= 0.7.0
                      , case-insensitive
                      , conduit
                      , conduit-extra

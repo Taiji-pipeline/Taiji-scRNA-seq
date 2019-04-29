@@ -83,13 +83,14 @@ getGeneIdxMap exons = do
 mkGeneCount :: Monad m
             => ExonTree
             -> M.Map B.ByteString Int
-            -> ConduitT BED o m (U.Vector Int, Double)
+            -> ConduitT BED o m ((B.ByteString, U.Vector Int), Double)
 mkGeneCount exons idxMap = do
+    cellBc <- fst . getIndex . fromJust . (^.name) . fromJust <$> peekC
     geneCount <- mapC fun .| foldlC combine M.empty
     let totalUMI = fromIntegral $ foldl' (+) 0 $ fmap (foldl' (+) 0) geneCount
         uniqUMI = fromIntegral $ foldl' (+) 0 $ fmap M.size geneCount
         dupRate = 1 - uniqUMI / totalUMI
-    return (sortCount $ fmap M.size geneCount, dupRate)
+    return ((cellBc, sortCount $ fmap M.size geneCount), dupRate)
   where
     combine m x = M.unionWith (M.unionWith (+)) m x
     fun bed = M.fromList $ zip genes $ repeat $ M.singleton umi (1 :: Int)
@@ -144,9 +145,10 @@ annotate anno = foldlC fun M.empty
       where
         res = S.unions $ IM.elems $ intersecting anno bed
 
-outputResult :: MonadIO m => Handle -> ConduitT (U.Vector Int) o m ()
-outputResult hdl = mapM_C $ liftIO . B.hPutStrLn hdl . B.intercalate "\t" .
-    map (B.pack . show) . U.toList
+outputResult :: MonadIO m
+             => Handle -> ConduitT (B.ByteString, U.Vector Int) o m ()
+outputResult hdl = mapM_C $ \(nm, vec) -> liftIO $ B.hPutStrLn hdl $
+    B.intercalate "\t" $ nm : map (B.pack . show) (U.toList vec)
 
 mkExonTree :: [Gene] -> ExonTree
 mkExonTree genes = bedToTree (++) $ concatMap f genes
