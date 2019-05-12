@@ -17,7 +17,7 @@ import Data.Aeson
 
 import qualified Data.Map.Strict                  as M
 
-import Taiji.Types
+import Taiji.Utils.Plot
 import           Taiji.Pipeline.SC.DropSeq.Types
 
 reportQC :: DropSeqConfig config
@@ -26,20 +26,18 @@ reportQC :: DropSeqConfig config
 reportQC x = do
     dir <- asks _dropseq_output_dir >>= getPath
     let output = dir ++ "/scRNA-seq.qc"
-    liftIO $ encodeFile output $ [getDupRate x, getAnnotation x]
+    liftIO $ savePlots output [getDupRate x, getAnnotation x] []
 
-getDupRate :: [(RNASeq S (a, [Double], b))] -> QC
-getDupRate es = QC "duplication_rate" $ Violin names dat
-  where
-    (names, dat) = unzip $ flip map es $ \e ->
-        let name = T.unpack (e^.eid) <> "_rep" <> show (e^.replicates._1)
-        in (name, e^.replicates._2.files._2)
+getDupRate :: [(RNASeq S (a, [Double], b))] -> Value
+getDupRate es = vegaViolin $ flip map es $ \e ->
+    let name = (e^.eid) <> "_rep" <> T.pack (show (e^.replicates._1))
+    in (name, e^.replicates._2.files._2)
 
-getAnnotation :: [(RNASeq S (a, b, M.Map Annotation Int))] -> QC
+getAnnotation :: [(RNASeq S (a, b, M.Map Annotation Int))] -> Value
 getAnnotation es = 
     let (labels, values) = unzip dat
         dat' = zip labels $ transpose $ map normalize $ transpose values
-    in QC "annotation" $ Bar names dat'
+    in vegaStackBar "annotation" "sample" "percentage" names dat'
   where
     dat = [ ("CDS", map (M.findWithDefault 0 CDS) stats)
           , ("UTR", map (M.findWithDefault 0 UTR) stats)
@@ -47,6 +45,6 @@ getAnnotation es =
           , ("Intergenic", map (M.findWithDefault 0 Intergenic) stats)
           , ("rRNA", map (M.findWithDefault 0 Ribosomal) stats) ]
     (names, stats) = unzip $ flip map es $ \e ->
-        let name = T.unpack (e^.eid) <> "_rep" <> show (e^.replicates._1)
+        let name = (e^.eid) <> "_rep" <> T.pack (show (e^.replicates._1))
         in (name, fmap fromIntegral $ e^.replicates._2.files._3)
-    normalize xs = let n = foldl' (+) 0 xs in map (/n) xs
+    normalize xs = let n = foldl' (+) 0 xs in map ((100*) . (/n)) xs

@@ -1,4 +1,4 @@
-resolver: nightly-2019-03-14
+resolver: nightly-2019-05-11
 
 flags:
   Taiji-scRNA-seq:
@@ -10,7 +10,7 @@ packages:
 extra-deps:
 
 - git:     https://github.com/Taiji-pipeline/Taiji-utils.git
-  commit:  576a427243a3003f823d7e0ed98d97035e0fa136
+  commit:  af37677ff940cd2b50090e7921b0bf8365e45fda
 
 - git:     https://github.com/Taiji-pipeline/Taiji-RNA-seq.git
   commit:  94c3de1a5e13e048d7cc5d53cc0295ca395ac1e7
