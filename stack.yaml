@@ -9,8 +9,8 @@ packages:
 
 extra-deps:
 
-- git:     https://github.com/Taiji-pipeline/Taiji-types.git
-  commit:  27fbb517f6b334a48300f01aa925011fee849547
+- git:     https://github.com/Taiji-pipeline/Taiji-utils.git
+  commit:  576a427243a3003f823d7e0ed98d97035e0fa136
 
 - git:     https://github.com/Taiji-pipeline/Taiji-RNA-seq.git
   commit:  94c3de1a5e13e048d7cc5d53cc0295ca395ac1e7
