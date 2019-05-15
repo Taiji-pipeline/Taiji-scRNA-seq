@@ -23,10 +23,12 @@ import           Taiji.Pipeline.SC.DropSeq.Types
 reportQC :: DropSeqConfig config
          => [(RNASeq S (File '[] 'Tsv, [Double], M.Map Annotation Int))]
          -> WorkflowConfig config ()
-reportQC x = do
-    dir <- asks _dropseq_output_dir >>= getPath
-    let output = dir ++ "/scRNA-seq.qc"
-    liftIO $ savePlots output [getDupRate x, getAnnotation x] []
+reportQC x
+    | null x = return ()
+    | otherwise = do
+        dir <- asks _dropseq_output_dir >>= getPath
+        let output = dir ++ "/scRNA-seq.html"
+        liftIO $ savePlots output [getDupRate x, getAnnotation x] []
 
 getDupRate :: [(RNASeq S (a, [Double], b))] -> Value
 getDupRate es = vegaViolin $ flip map es $ \e ->
