@@ -17,7 +17,7 @@ import           Control.Monad.IO.Class               (liftIO)
 import qualified Data.Text as T
 import Shelly hiding (FilePath)
 import Control.Lens
-import           Control.Monad.Reader                 (asks)
+import           Control.Monad.Reader                 (asks, ReaderT)
 import           Text.Printf                          (printf)
 import Data.Either (rights)
 import qualified Data.ByteString.Char8                as B
@@ -25,7 +25,6 @@ import Conduit
 import Data.Conduit.Internal (zipSources)
 import Bio.Pipeline.Barcode (deBarcode, unBarCode)
 import qualified Bio.Data.Fastq as F
-import           Scientific.Workflow
 import qualified Data.HashMap.Strict                  as M
 
 import           Taiji.Pipeline.SC.DropSeq.Types
@@ -33,7 +32,7 @@ import           Taiji.Pipeline.SC.DropSeq.Types
 type RAWInput = RNASeq N [Either SomeFile (SomeFile, SomeFile)]
 
 readInput :: DropSeqConfig config
-          => () -> WorkflowConfig config [RAWInput]
+          => () -> ReaderT config IO [RAWInput]
 readInput _ = do
     input <- asks _dropseq_input 
     liftIO $ simpleInputReader input "drop-seq" RNASeq
@@ -49,7 +48,7 @@ getFastq inputs = concatMap split $ concatMap split $
 
 extractBarcode :: DropSeqConfig config
                => RNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)
-               -> WorkflowConfig config (RNASeq S (File '[Gzip] 'Fastq))
+               -> ReaderT config IO (RNASeq S (File '[Gzip] 'Fastq))
 extractBarcode input = input & replicates.traverse.files %%~ fun
   where
     fun (flRead1, flRead2) = do

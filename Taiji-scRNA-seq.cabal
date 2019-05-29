@@ -28,15 +28,15 @@ library
 
   build-depends:       base >= 4.7 && < 5
                      , aeson
+                     , binary
                      , bytestring
                      , bio-pipelines
                      , bio-experiments
-                     , bioinformatics-toolkit >= 0.7.0
+                     , bioinformatics-toolkit >= 0.8.0
                      , case-insensitive
                      , conduit
                      , conduit-extra
                      , containers
-                     , cereal
                      , matrices
                      , double-conversion
                      , data-ordlist
@@ -48,7 +48,7 @@ library
                      , mtl
                      , singletons >= 2.5
                      , shelly
-                     , SciFlow >= 0.6.2
+                     , SciFlow >= 0.7.0
                      , temporary
                      , text
                      , unordered-containers
@@ -69,10 +69,13 @@ executable taiji-scrna-seq
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , Taiji-scRNA-seq
+                     , binary
                      , lens
                      , aeson
                      , bio-pipelines
-                     , SciFlow >= 0.6.2
+                     , SciFlow >= 0.7.0
+                     , SciFlow-app 
+                     , SciFlow-drmaa
                      , data-default
   default-language:    Haskell2010
 

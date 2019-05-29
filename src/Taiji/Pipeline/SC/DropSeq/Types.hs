@@ -7,7 +7,7 @@ module Taiji.Pipeline.SC.DropSeq.Types
 import Data.Hashable
 import           Bio.Pipeline.Utils
 import Data.Aeson
-import Data.Serialize
+import Data.Binary
 import           GHC.Generics (Generic)
 
 class DropSeqConfig config where
@@ -35,5 +35,4 @@ instance FromJSON Annotation
 instance ToJSON Annotation
 instance FromJSONKey Annotation
 instance ToJSONKey Annotation
-instance Serialize Annotation
-
+instance Binary Annotation

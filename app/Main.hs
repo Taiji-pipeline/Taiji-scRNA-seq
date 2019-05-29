@@ -8,10 +8,16 @@ module Main where
 import           Bio.Pipeline.Utils
 import           Control.Lens                  ((.=))
 import           Data.Aeson                    (FromJSON, ToJSON)
+import Data.Binary
 import           Data.Default
 import           Data.Maybe                    (fromJust)
 import           GHC.Generics                  (Generic)
-import           Scientific.Workflow
+import Data.Proxy (Proxy(..))
+
+import           Control.Workflow
+import qualified Control.Workflow.Coordinator.Drmaa as D
+import Control.Workflow.Main (defaultMainWith)
+import Control.Workflow.Main.Command (run, view, remote)
 
 import qualified Taiji.Pipeline.SC.DropSeq as DropSeq
 import Taiji.Pipeline.SC.DropSeq.Types (DropSeqConfig(..))
@@ -29,6 +35,7 @@ data RNASeqOpts = RNASeqOpts
 
 instance FromJSON RNASeqOpts
 instance ToJSON RNASeqOpts
+instance Binary RNASeqOpts
 
 instance Default RNASeqOpts where
     def = RNASeqOpts
@@ -51,7 +58,20 @@ instance DropSeqConfig RNASeqOpts where
     _dropseq_annotation = fromJust . annotation
     _dropseq_genome_fasta = genome
 
-mainWith defaultMainOpts
-    { programHeader = "Taiji-RNA-Seq"
-    , workflowConfigType = Just ''RNASeqOpts } $ do
-        DropSeq.builder
+build "wf" [t| SciFlow RNASeqOpts |] DropSeq.builder
+
+decodeDrmaa :: String -> Int -> FilePath -> IO D.DrmaaConfig
+decodeDrmaa ip port _ = do
+    config <- D.getDefaultDrmaaConfig
+    let exePath = fst $ D._cmd config
+    return $ config { D._cmd = (exePath,
+        ["remote", "--ip", ip, "--port", show port]) }
+
+main :: IO ()
+main = defaultMainWith cmd wf
+  where
+    cmd = [ ("run", run decodeDrmaa)
+          , ("view", view)
+          , ("remote", remote (Proxy :: Proxy D.Drmaa))
+          ]
+

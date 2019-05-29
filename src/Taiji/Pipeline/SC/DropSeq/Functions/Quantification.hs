@@ -19,7 +19,7 @@ import Data.List.Ordered
 import           Control.Lens
 import           Control.Monad
 import           Control.Monad.IO.Class               (liftIO)
-import           Control.Monad.Reader                 (asks)
+import           Control.Monad.Reader                 (ReaderT, asks)
 import qualified Data.ByteString.Char8                as B
 import           Data.CaseInsensitive                 (original)
 import Data.Ord
@@ -32,7 +32,6 @@ import           Data.List
 import           Data.Maybe
 import qualified Data.Text                            as T
 import System.IO
-import           Scientific.Workflow
 import           Text.Printf                          (printf)
 
 import           Taiji.Pipeline.SC.DropSeq.Types
@@ -42,7 +41,7 @@ type ExonTree = BEDTree [B.ByteString]
 
 quantification :: DropSeqConfig config
                => RNASeq S (File '[NameSorted] 'Bam)
-               -> WorkflowConfig config ( RNASeq S
+               -> ReaderT config IO ( RNASeq S
                   ( File '[] 'Tsv
                   , [Double]
                   , M.Map Annotation Int) )

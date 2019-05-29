@@ -12,18 +12,17 @@ import           Bio.Data.Experiment
 import           Bio.Pipeline
 import           Control.Lens
 import           Control.Monad.IO.Class               (liftIO)
-import           Control.Monad.Reader                 (asks)
+import           Control.Monad.Reader                 (asks, ReaderT)
 import           Data.Either                          (fromLeft)
 import System.IO.Temp (withTempFile)
 import           Data.Maybe
 import qualified Data.Text                            as T
-import           Scientific.Workflow
 import Shelly hiding (FilePath)
 import           Text.Printf                          (printf)
 
 import           Taiji.Pipeline.SC.DropSeq.Types
 
-mkIndex :: DropSeqConfig config => [a] -> WorkflowConfig config [a]
+mkIndex :: DropSeqConfig config => [a] -> ReaderT config IO [a]
 mkIndex input
     | null input = return input
     | otherwise = do
@@ -37,7 +36,7 @@ mkIndex input
 
 tagAlign :: DropSeqConfig config
          => RNASeq S (File '[Gzip] 'Fastq)
-         -> WorkflowConfig config (RNASeq S (File '[] 'Bam))
+         -> ReaderT config IO (RNASeq S (File '[] 'Bam))
 tagAlign input = do
     dir <- asks ((<> "/Bam") . _dropseq_output_dir) >>= getPath
     idx <- asks _dropseq_star_index
@@ -52,7 +51,7 @@ tagAlign input = do
 -- | Filter bad quality reads and name sort Bam file.
 filterBamSort :: DropSeqConfig config
               => RNASeq S (File '[] 'Bam)
-              -> WorkflowConfig config (RNASeq S (File '[NameSorted] 'Bam))
+              -> ReaderT config IO (RNASeq S (File '[NameSorted] 'Bam))
 filterBamSort input = do
     dir <- asks ((<> "/Bam") . _dropseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_filt.bam" dir (T.unpack $ input^.eid)

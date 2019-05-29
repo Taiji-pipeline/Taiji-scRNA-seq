@@ -9,8 +9,7 @@ import           Bio.Data.Experiment
 import Control.Lens
 import Data.List
 import           Control.Monad.IO.Class               (liftIO)
-import           Control.Monad.Reader                 (asks)
-import           Scientific.Workflow
+import           Control.Monad.Reader                 (asks, ReaderT)
 
 import qualified Data.Text as T
 import Data.Aeson
@@ -22,7 +21,7 @@ import           Taiji.Pipeline.SC.DropSeq.Types
 
 reportQC :: DropSeqConfig config
          => [(RNASeq S (File '[] 'Tsv, [Double], M.Map Annotation Int))]
-         -> WorkflowConfig config ()
+         -> ReaderT config IO ()
 reportQC x
     | null x = return ()
     | otherwise = do
