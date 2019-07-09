@@ -9,25 +9,20 @@ module Taiji.Pipeline.SC.DropSeq.Functions.Preprocess
     , extractBarcode
     ) where
 
-import           Bio.Data.Experiment
-import           Bio.Data.Experiment.Types
 import           Bio.Data.Experiment.Parser
+import           Bio.Data.Experiment.Types
 import           Bio.Pipeline
-import           Control.Monad.IO.Class               (liftIO)
 import qualified Data.Text as T
 import Shelly hiding (FilePath)
-import Control.Lens
-import           Control.Monad.Reader                 (asks, ReaderT)
-import           Text.Printf                          (printf)
 import Data.Either (rights)
 import qualified Data.ByteString.Char8                as B
-import Conduit
 import Data.Conduit.Internal (zipSources)
 import Bio.Pipeline.Barcode (deBarcode, unBarCode)
 import qualified Bio.Data.Fastq as F
 import qualified Data.HashMap.Strict                  as M
 
 import           Taiji.Pipeline.SC.DropSeq.Types
+import Taiji.Prelude
 
 type RAWInput = RNASeq N [Either SomeFile (SomeFile, SomeFile)]
 

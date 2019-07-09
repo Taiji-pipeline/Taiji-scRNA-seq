@@ -44,7 +44,6 @@ library
                      , hashable
                      , HsHTSLib
                      , IntervalMap
-                     , lens
                      , mtl
                      , singletons >= 2.5
                      , shelly

@@ -2,43 +2,44 @@
 {-# LANGUAGE DataKinds         #-}
 
 module Taiji.Pipeline.SC.DropSeq.Functions.QC
-    (reportQC) where
+    (annoQC) where
 
 import           Bio.Pipeline
-import           Bio.Data.Experiment
-import Control.Lens
-import Data.List
-import           Control.Monad.IO.Class               (liftIO)
-import           Control.Monad.Reader                 (asks, ReaderT)
 
 import qualified Data.Text as T
 import Data.Aeson
 
 import qualified Data.Map.Strict                  as M
 
+import Taiji.Prelude
 import Taiji.Utils.Plot
+import Taiji.Utils.Plot.ECharts
+import qualified Taiji.Utils.DataFrame as DF
 import           Taiji.Pipeline.SC.DropSeq.Types
 
-reportQC :: DropSeqConfig config
-         => [(RNASeq S (File '[] 'Tsv, [Double], M.Map Annotation Int))]
-         -> ReaderT config IO ()
-reportQC x
-    | null x = return ()
-    | otherwise = do
-        dir <- asks _dropseq_output_dir >>= getPath
-        let output = dir ++ "/scRNA-seq.html"
-        liftIO $ savePlots output [getDupRate x, getAnnotation x] []
-
-getDupRate :: [(RNASeq S (a, [Double], b))] -> Value
-getDupRate es = vegaViolin $ flip map es $ \e ->
+{-
+dupRate :: DropSeqConfig config
+        => [(RNASeq S (a, [Double], b))]
+        -> ReaderT config IO ()
+dupRate es = do
+    dir <- qcDir
+    let output = dir ++ "qc_duplication.html"
+    
+    vegaViolin $ flip map es $ \e ->
     let name = (e^.eid) <> "_rep" <> T.pack (show (e^.replicates._1))
     in (name, e^.replicates._2.files._2)
+    -}
 
-getAnnotation :: [(RNASeq S (a, b, M.Map Annotation Int))] -> Value
-getAnnotation es = 
-    let (labels, values) = unzip dat
-        dat' = zip labels $ transpose $ map normalize $ transpose values
-    in vegaStackBar "annotation" "sample" "percentage" names dat'
+annoQC :: DropSeqConfig config
+       => [(RNASeq S (a, b, M.Map Annotation Int))]
+       -> ReaderT config IO ()
+annoQC es = do
+    dir <- qcDir
+    let output = dir ++ "annotation.html"
+        (labels, values) = unzip dat
+        df = DF.mkDataFrame names labels $ transpose $ map normalize $
+            transpose values
+    liftIO $ savePlots output [] [stackBar df]
   where
     dat = [ ("CDS", map (M.findWithDefault 0 CDS) stats)
           , ("UTR", map (M.findWithDefault 0 UTR) stats)

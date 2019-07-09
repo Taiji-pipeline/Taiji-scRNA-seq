@@ -11,29 +11,20 @@ import           Bio.Utils.Misc (readInt)
 import           Bio.Data.Bed.Types
 import Data.Char (toLower)
 import           Bio.Pipeline
-import           Bio.Data.Experiment
 import           Bio.RealWorld.GENCODE
-import           Conduit
 import           Data.Conduit.Internal (zipSinks)
 import Data.List.Ordered
-import           Control.Lens
-import           Control.Monad
-import           Control.Monad.IO.Class               (liftIO)
-import           Control.Monad.Reader                 (ReaderT, asks)
 import qualified Data.ByteString.Char8                as B
 import           Data.CaseInsensitive                 (original)
-import Data.Ord
 import qualified Data.Map.Strict                  as M
 import qualified Data.IntervalMap.Strict              as IM
 import qualified Data.HashSet as S
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
-import           Data.List
-import           Data.Maybe
 import qualified Data.Text                            as T
 import System.IO
-import           Text.Printf                          (printf)
 
+import Taiji.Prelude
 import           Taiji.Pipeline.SC.DropSeq.Types
 import Taiji.Pipeline.SC.DropSeq.Functions.Utils
 

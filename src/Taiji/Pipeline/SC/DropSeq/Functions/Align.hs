@@ -8,19 +8,14 @@ module Taiji.Pipeline.SC.DropSeq.Functions.Align
     , filterBamSort
     ) where
 
-import           Bio.Data.Experiment
 import           Bio.Pipeline
-import           Control.Lens
-import           Control.Monad.IO.Class               (liftIO)
-import           Control.Monad.Reader                 (asks, ReaderT)
 import           Data.Either                          (fromLeft)
 import System.IO.Temp (withTempFile)
-import           Data.Maybe
 import qualified Data.Text                            as T
 import Shelly hiding (FilePath)
-import           Text.Printf                          (printf)
 
 import           Taiji.Pipeline.SC.DropSeq.Types
+import Taiji.Prelude
 
 mkIndex :: DropSeqConfig config => [a] -> ReaderT config IO [a]
 mkIndex input

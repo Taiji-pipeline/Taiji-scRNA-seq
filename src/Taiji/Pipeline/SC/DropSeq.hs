@@ -3,8 +3,8 @@
 module Taiji.Pipeline.SC.DropSeq ( builder) where
 
 import           Control.Workflow
-import Control.Lens
 
+import Taiji.Prelude
 import           Taiji.Pipeline.SC.DropSeq.Functions
 
 builder :: Builder ()
@@ -23,5 +23,5 @@ builder = do
     nodePar "Quantification" 'quantification $ return ()
     path ["Extract_Barcode", "Make_Index", "Align", "Filter_Bam", "Quantification"]
 
-    node "Run_QC" 'reportQC $ return ()
-    ["Quantification"] ~> "Run_QC"
+    node "QC_Anno" 'annoQC $ return ()
+    ["Quantification"] ~> "QC_Anno"
