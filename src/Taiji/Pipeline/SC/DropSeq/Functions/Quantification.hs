@@ -106,7 +106,7 @@ readAnnotations input = do
           return ( BED3 chr (readInt start - 1) (readInt end - 1)
               , a : (mito ++ rRNA) )
       where
-        basicAnno = case B.map toLower name of
+        basicAnno = case B.map toLower nm of
             "gene" -> Just Genic
             "cds" -> Just CDS
             "utr" -> Just UTR
@@ -118,7 +118,7 @@ readAnnotations input = do
              | otherwise = []
         ty = B.init $ B.drop 2 $ fromJust $ lookup "gene_type" $
             map (B.break isSpace . strip) $ B.split ';' info
-        [chr,_,name,start,end,_,_,_,info] = B.split '\t' l
+        [chr,_,nm,start,end,_,_,_,info] = B.split '\t' l
         strip = fst . B.spanEnd isSpace . B.dropWhile isSpace
         isSpace = (== ' ')
 
@@ -144,4 +144,5 @@ mkExonTree :: [Gene] -> ExonTree
 mkExonTree genes = bedToTree (++) $ concatMap f genes
   where
     f Gene{..} = map ( \(a,b) ->
-        (asBed geneChrom a b :: BED3, [original geneName]) ) geneExon 
+        (asBed geneChrom a b :: BED3, [original geneName]) ) $
+        nubSort $ concatMap transExon geneTranscripts

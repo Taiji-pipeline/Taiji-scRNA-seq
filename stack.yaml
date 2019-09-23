@@ -1,4 +1,4 @@
-resolver: nightly-2019-05-22
+resolver: nightly-2019-05-25
 
 flags:
   Taiji-scRNA-seq:
@@ -10,24 +10,22 @@ packages:
 extra-deps:
 
 - git:     https://github.com/Taiji-pipeline/Taiji-utils.git
-  commit:  af37677ff940cd2b50090e7921b0bf8365e45fda
+  commit:  d74b455b0eac235b1059c5dee50ec5d960a6608b
 
 - git:     https://github.com/Taiji-pipeline/Taiji-RNA-seq.git
-  commit:  94c3de1a5e13e048d7cc5d53cc0295ca395ac1e7
+  commit:  ed1aba1edb923ae61b4e2b2ee2b2a60e7c2be86c
 
-#- git:     https://github.com/Taiji-pipeline/bio-pipelines.git
-#  commit:  4e8dfffd751229259e6e3cede1483fb7fe7bf018
-- '../bio-pipelines'
+- git:     https://github.com/Taiji-pipeline/bio-pipelines.git
+  commit:  f5eb179697a15515786a03ee1fad5fe5bcfd4a00
 
-#- git:     https://github.com/Taiji-pipeline/bio-experiments.git
-#  commit:  4c425bf96f392fb1f9098821f643895ef1226151
-- '../bio-experiments'
+- git:     https://github.com/Taiji-pipeline/bio-experiments.git
+  commit:  470d1c09c8b8ecc64ced5f085c87cc66d70f8b9d
 
 - git:     https://github.com/kaizhang/haskell-igraph.git
   commit:  e9db8aad4ca005257a464a5eff0e5ff15aa761b2
 
 - git:     https://github.com/kaizhang/SciFlow.git
-  commit:  86061600d55b6f190d712697c9361916d28ecc4a
+  commit:  92a77e51d23bdb10b72bf21139468e2b6d45a335
   subdirs:
       - SciFlow
       - SciFlow-app
@@ -41,10 +39,6 @@ extra-deps:
 - git:     https://github.com/haskell-distributed/distributed-process.git
   commit:  660d554f6acd2dba8b605c84e8fa69e45708bc14
 
-- git:     https://github.com/kaizhang/bioinformatics-toolkit.git
-  commit:  75a8a813410a5c8267a59794c875f4d277ceb1be
-  subdirs: 
-    - bioinformatics-toolkit
-
+- bioinformatics-toolkit-0.9.0
 - HsHTSLib-1.9.2
 - clustering-0.4.1

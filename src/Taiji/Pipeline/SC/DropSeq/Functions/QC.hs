@@ -4,11 +4,7 @@
 module Taiji.Pipeline.SC.DropSeq.Functions.QC
     (annoQC) where
 
-import           Bio.Pipeline
-
 import qualified Data.Text as T
-import Data.Aeson
-
 import qualified Data.Map.Strict                  as M
 
 import Taiji.Prelude
