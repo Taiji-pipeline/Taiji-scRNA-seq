@@ -30,6 +30,7 @@ library
                      , aeson
                      , binary
                      , bytestring
+                     , bytestring-lexing
                      , bio-pipelines
                      , bio-experiments
                      , bioinformatics-toolkit >= 0.9.0

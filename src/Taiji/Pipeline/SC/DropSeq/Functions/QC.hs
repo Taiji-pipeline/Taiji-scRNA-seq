@@ -2,14 +2,15 @@
 {-# LANGUAGE DataKinds         #-}
 
 module Taiji.Pipeline.SC.DropSeq.Functions.QC
-    (annoQC) where
+    (plotQC) where
 
 import qualified Data.Text as T
-import qualified Data.Map.Strict                  as M
+import qualified Data.Matrix as M
+import qualified Data.Vector as V
 
 import Taiji.Prelude
 import Taiji.Utils.Plot
-import Taiji.Utils.Plot.ECharts
+import Taiji.Utils.Plot.Vega
 import qualified Taiji.Utils.DataFrame as DF
 import           Taiji.Pipeline.SC.DropSeq.Types
 
@@ -26,23 +27,14 @@ dupRate es = do
     in (name, e^.replicates._2.files._2)
     -}
 
-annoQC :: DropSeqConfig config
-       => [(RNASeq S (a, b, M.Map Annotation Int))]
+plotQC :: DropSeqConfig config
+       => [RNASeq S (File '[] 'Tsv, File '[] 'Tsv)]
        -> ReaderT config IO ()
-annoQC es = do
+plotQC inputs = do
     dir <- qcDir
-    let output = dir ++ "annotation.html"
-        (labels, values) = unzip dat
-        df = DF.mkDataFrame names labels $ transpose $ map normalize $
-            transpose values
-    liftIO $ savePlots output [] [stackBar df]
-  where
-    dat = [ ("CDS", map (M.findWithDefault 0 CDS) stats)
-          , ("UTR", map (M.findWithDefault 0 UTR) stats)
-          , ("Intron", map (M.findWithDefault 0 Intron) stats)
-          , ("Intergenic", map (M.findWithDefault 0 Intergenic) stats)
-          , ("rRNA", map (M.findWithDefault 0 Ribosomal) stats) ]
-    (names, stats) = unzip $ flip map es $ \e ->
-        let name = (e^.eid) <> "_rep" <> T.pack (show (e^.replicates._1))
-        in (name, fmap fromIntegral $ e^.replicates._2.files._3)
-    normalize xs = let n = foldl' (+) 0 xs in map ((100*) . (/n)) xs
+    forM_ inputs $ \input -> liftIO $ do
+        let output = printf "%s/%s_rep%d_qc.html" dir (T.unpack $ input^.eid)
+                (input^.replicates._1)
+        df <- DF.readTable $ input^.replicates._2.files._2.location
+        let plts = flip map (M.toColumns $ DF._dataframe_data df) $ \col -> hist (V.toList col) 100
+        savePlots output plts []

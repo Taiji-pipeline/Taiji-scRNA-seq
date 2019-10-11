@@ -21,5 +21,5 @@ builder = do
     nodePar "Quantification" 'quantification $ return ()
     path ["Extract_Barcode", "Make_Index", "Align", "Filter_Bam", "Quantification"]
 
-    node "QC_Anno" 'annoQC $ return ()
-    ["Quantification"] ~> "QC_Anno"
+    node "QC" 'plotQC $ return ()
+    ["Quantification"] ~> "QC"

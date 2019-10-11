@@ -13,86 +13,121 @@ import Data.Char (toLower)
 import           Bio.Pipeline
 import           Bio.RealWorld.GENCODE
 import           Data.Conduit.Internal (zipSinks)
+import Data.ByteString.Lex.Integral (packDecimal)
+import qualified Data.Vector.Unboxed as U
 import Data.List.Ordered
 import qualified Data.ByteString.Char8                as B
 import           Data.CaseInsensitive                 (original)
 import qualified Data.Map.Strict                  as M
+import qualified Data.IntMap.Strict as I
 import qualified Data.IntervalMap.Strict              as IM
 import qualified Data.HashSet as S
-import qualified Data.Vector.Unboxed as U
-import qualified Data.Vector.Unboxed.Mutable as UM
 import qualified Data.Text                            as T
-import System.IO
 
 import Taiji.Prelude
+import Taiji.Utils
 import           Taiji.Pipeline.SC.DropSeq.Types
 import Taiji.Pipeline.SC.DropSeq.Functions.Utils
 
-type ExonTree = BEDTree [B.ByteString]
+type ExonTree = BEDTree [Int]
+
+mkExonTree :: [Gene] -> ExonTree
+mkExonTree genes = bedToTree (++) $ concat $ zipWith f [0..] genes
+  where
+    f i Gene{..} = map ( \(a,b) -> (asBed geneChrom a b :: BED3, [i]) ) $
+        nubSort $ concatMap transExon geneTranscripts
+
+data QC = QC
+    { _cell_barcode :: B.ByteString
+    , _dupRate :: Double
+    , _num_umi :: Int
+    , _genomics_context :: M.Map Annotation Int }
+
+showQC :: QC -> B.ByteString
+showQC QC{..} = B.intercalate "\t" $ (_cell_barcode:) $ map (B.pack . show) $
+    _dupRate : map fromIntegral (_num_umi : dat)
+  where
+    dat = map (\x -> M.findWithDefault 0 x _genomics_context)
+        [CDS, UTR, Intron, Intergenic, Ribosomal, Mitochondrial]
 
 quantification :: DropSeqConfig config
                => RNASeq S (File '[NameSorted] 'Bam)
                -> ReaderT config IO ( RNASeq S
                   ( File '[] 'Tsv
-                  , [Double]
-                  , M.Map Annotation Int) )
+                  , File '[] 'Tsv ) )
 quantification input = do
     dir <- asks ((<> "/Quantification/") . _dropseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_quant.tsv" dir (T.unpack $ input^.eid)
+            (input^.replicates._1)
+        qc = printf "%s/%s_rep%d_qc.tsv" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
     anno_f <- asks _dropseq_annotation
 
     input & replicates.traverse.files %%~ liftIO . ( \bam -> do
         hdr <- getBamHeader $ bam^.location
 
-        exons <- mkExonTree <$> readGenes anno_f
+        genes <- readGenes anno_f
         anno <- readAnnotations anno_f
-        (idxMap, annoCount) <- runResourceT $ runConduit $ streamBam (bam^.location) .|
-            bamToBedC hdr .| zipSinks (getGeneIdxMap exons) (annotate anno)
+        let exons = mkExonTree genes
+            geneNames = B.intercalate "\t" $ "" : map (original . geneName) genes
+            printRow (nm, val) = B.intercalate "\t" $ nm :
+                map (fromJust . packDecimal)
+                (U.toList $ U.replicate (length genes) 0 U.// val)
+            outputMat = mapC fst .| (yield geneNames >> mapC printRow) .|
+                unlinesAsciiC .| sinkFile output
+            outputQC = (yield header >> mapC (showQC . snd)) .|
+                unlinesAsciiC .| sinkFile qc
+            header = "\tduplication\tUMI\tCDS\tUTR\tIntron\tIntergenic\tRibosomal\tMitochondrial"
 
-        withFile output WriteMode $ \h -> do
-            B.hPutStrLn h $ B.intercalate "\t" $ map fst $
-                sortBy (comparing snd) $ M.toList idxMap 
-            dupRate <- runResourceT $ fmap snd $ runConduit $
-                streamBam (bam^.location) .| bamToBedC hdr .|
-                groupOnC (fst . getIndex . fromJust . (^.name)) .|
-                mapMC (\x -> runConduit $ x .| mkGeneCount exons idxMap) .|
-                zipSinks (mapC fst .| outputResult h) (mapC snd .| sinkList)
-            return (location .~ output $ emptyFile, dupRate, annoCount)
+        _ <- runResourceT $ runConduit $
+            streamBam (bam^.location) .| bamToBedC hdr .|
+            groupOnC (fst . getIndex . fromJust . (^.name)) .|
+            mapMC ( \x -> do
+                ((row, umi, dupRate), annoCount) <- runConduit $ x .|
+                    zipSinks (getGeneCount exons) (annotate anno)
+                return (row, QC (fst row) dupRate umi annoCount)
+            ) .| zipSinks outputMat outputQC
+        return ( location .~ output $ emptyFile
+               , location .~ qc $ emptyFile )
         )
 
-getGeneIdxMap :: Monad m
-              => ExonTree -> ConduitT BED o m (M.Map B.ByteString Int)
-getGeneIdxMap exons = do
-    s <- foldlC f S.empty
-    return $ M.fromList $ zip (S.toList s) [0..]
-  where
-    f geneSet bed = foldl' (flip S.insert) geneSet $ concat $
-        IM.elems $ intersecting exons bed
+{-
+mkTable :: DropSeqConfig config
+        => RNASeq S (File '[] 'Other , File '[] 'Tsv)
+        -> RNASeq S (File '[] 'Tsv)
+mkTable input = do
+    dir <- asks ((<> "/Quantification/") . _dropseq_output_dir) >>= getPath
+    let output = printf "%s/%s_rep%d_quant.tsv" dir (T.unpack $ input^.eid)
+            (input^.replicates._1)
+    anno_f <- asks _dropseq_annotation
 
-mkGeneCount :: Monad m
-            => ExonTree
-            -> M.Map B.ByteString Int
-            -> ConduitT BED o m ((B.ByteString, U.Vector Int), Double)
-mkGeneCount exons idxMap = do
+    input & replicates.traverse.files %%~ liftIO . ( \(fl, _) -> do
+        anno <- readAnnotations anno_f
+        -}
+
+getGeneCount :: Monad m
+             => ExonTree
+             -> ConduitT BED o m (Row Int, Int, Double)
+getGeneCount exons = do
     cellBc <- fst . getIndex . fromJust . (^.name) . fromJust <$> peekC
-    geneCount <- mapC fun .| foldlC combine M.empty
-    let totalUMI = fromIntegral $ foldl' (+) 0 $ fmap (foldl' (+) 0) geneCount
-        uniqUMI = fromIntegral $ foldl' (+) 0 $ fmap M.size geneCount
-        dupRate = 1 - uniqUMI / totalUMI
-    return ((cellBc, sortCount $ fmap M.size geneCount), dupRate)
+
+    geneCount <- concatMapC count .| foldlC reduce I.empty
+
+    let c = I.toList $ fmap M.size geneCount
+        uniqUMI = foldl' (+) 0 $ map snd c
+        totalUMI = fromIntegral $ foldl' (+) 0 $ fmap (foldl' (+) 0) geneCount
+        dupRate = 1 - fromIntegral uniqUMI / totalUMI
+
+    return ((cellBc, c), uniqUMI, dupRate)
   where
-    combine m x = M.unionWith (M.unionWith (+)) m x
-    fun bed = M.fromList $ zip genes $ repeat $ M.singleton umi (1 :: Int)
+    reduce m (idx, umi) = I.alter f idx m
       where
-        genes = concat $ IM.elems $ intersecting exons bed
-        (_, umi) = getIndex $ fromJust $ bed^.name
-    sortCount count = U.create $ do
-        vec <- UM.replicate (M.size idxMap) 0
-        forM_ (M.toList count) $ \(g, c) -> do
-            let idx = M.findWithDefault undefined g idxMap
-            UM.write vec idx c
-        return vec
+        f Nothing = Just $ M.singleton umi (1 :: Int)
+        f (Just x) = Just $ M.insertWith (+) umi 1 x
+    count :: BED -> [(Int, B.ByteString)]
+    count bed = zip (concat $ IM.elems $ intersecting exons bed) $ repeat $
+        snd $ getIndex $ fromJust $ bed^.name
+
 
 readAnnotations :: FilePath -> IO (BEDTree (S.HashSet Annotation))
 readAnnotations input = do
@@ -134,15 +169,3 @@ annotate anno = foldlC fun M.empty
         | otherwise = foldl' (\acc x -> M.insertWith (+) x 1 acc) m res
       where
         res = S.unions $ IM.elems $ intersecting anno bed
-
-outputResult :: MonadIO m
-             => Handle -> ConduitT (B.ByteString, U.Vector Int) o m ()
-outputResult hdl = mapM_C $ \(nm, vec) -> liftIO $ B.hPutStrLn hdl $
-    B.intercalate "\t" $ nm : map (B.pack . show) (U.toList vec)
-
-mkExonTree :: [Gene] -> ExonTree
-mkExonTree genes = bedToTree (++) $ concatMap f genes
-  where
-    f Gene{..} = map ( \(a,b) ->
-        (asBed geneChrom a b :: BED3, [original geneName]) ) $
-        nubSort $ concatMap transExon geneTranscripts
