@@ -30,6 +30,7 @@ dupRate es = do
 plotQC :: DropSeqConfig config
        => [RNASeq S (File '[] 'Tsv, File '[] 'Tsv)]
        -> ReaderT config IO ()
+plotQC [] = return ()
 plotQC inputs = do
     dir <- qcDir
     forM_ inputs $ \input -> liftIO $ do

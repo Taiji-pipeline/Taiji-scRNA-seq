@@ -55,8 +55,10 @@ extractBarcode input = input & replicates.traverse.files %%~ fun
                 True -> return ()
                 False -> error "Please install umi_tools: https://github.com/CGATOxford/UMI-tools"
             let output = printf "%s/%s_extract.fastq.gz" outdir (T.unpack $ input^.eid)
+                whitelistFl = printf "%s/%s_whitelist.tsv" outdir (T.unpack $ input^.eid)
                 plt = printf "%s/%s_whitelist" outdir (T.unpack $ input^.eid)
             whitelist <- getWhiteList lenCellBc lenUmi (read1^.location) plt
+            saveWhiteList whitelistFl whitelist
             runResourceT $ runConduit $ zipSources
                 (F.streamFastqGzip $ read1^.location)
                 (F.streamFastqGzip $ read2^.location) .| 
@@ -67,6 +69,12 @@ extractBarcode input = input & replicates.traverse.files %%~ fun
         read2 = fromSomeTags flRead2 :: File '[] 'Fastq
 
 type Whitelist = M.HashMap B.ByteString B.ByteString
+
+saveWhiteList :: FilePath -> Whitelist -> IO ()
+saveWhiteList output = B.writeFile output . B.unlines .
+    map (\(a,b) -> a <> "\t" <> B.intercalate "," b) . M.toList .
+    M.fromListWith (++) . map (\(a,b) -> (b, [a])) . M.toList
+{-# INLINE saveWhiteList #-}
 
 getWhiteList :: Int   -- ^ cell barcode length
              -> Int   -- ^ umi length
