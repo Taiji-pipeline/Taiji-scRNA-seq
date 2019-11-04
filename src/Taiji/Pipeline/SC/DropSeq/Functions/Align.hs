@@ -5,7 +5,7 @@
 module Taiji.Pipeline.SC.DropSeq.Functions.Align
     ( mkIndex
     , tagAlign
-    , filterBamSort
+    , filterNameSortBam
     ) where
 
 import           Bio.Pipeline
@@ -44,10 +44,10 @@ tagAlign input = do
     opt = defaultSTAROpts & starCores .~ 4 & starTranscriptome .~ Nothing
 
 -- | Filter bad quality reads and name sort Bam file.
-filterBamSort :: DropSeqConfig config
-              => RNASeq S (File '[] 'Bam)
-              -> ReaderT config IO (RNASeq S (File '[NameSorted] 'Bam))
-filterBamSort input = do
+filterNameSortBam :: DropSeqConfig config
+                  => RNASeq S (File '[] 'Bam)
+                  -> ReaderT config IO (RNASeq S (File '[NameSorted] 'Bam))
+filterNameSortBam input = do
     dir <- asks ((<> "/Bam") . _dropseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_filt.bam" dir (T.unpack $ input^.eid)
             (input^.replicates._1)

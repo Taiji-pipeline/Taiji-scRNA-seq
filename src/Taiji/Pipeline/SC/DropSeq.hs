@@ -17,7 +17,7 @@ builder = do
 
     node "Make_Index" 'mkIndex $ return ()
     nodePar "Align" 'tagAlign $ nCore .= 4
-    nodePar "Filter_Bam" 'filterBamSort $ return ()
+    nodePar "Filter_Bam" 'filterNameSortBam $ return ()
     nodePar "Quantification" 'quantification $ return ()
     path ["Extract_Barcode", "Make_Index", "Align", "Filter_Bam", "Quantification"]
 
