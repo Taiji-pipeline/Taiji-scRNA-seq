@@ -25,5 +25,12 @@ builder = do
     path ["Extract_Barcode", "Make_Index", "Align", "Filter_Bam"
         , "Quantification", "Remove_Doublet"]
 
+    nodePar "Reduce_Dimension" [| \input -> do
+        let input' = input & replicates.traverse.files %~ snd . fst
+            prefix = "/Cluster/"
+        filterMatrix prefix input' >>= spectral "/Cluster/" Nothing 
+        |] $ return ()
+    path ["Remove_Doublet", "Reduce_Dimension"] 
+
     node "QC" 'plotQC $ return ()
     ["Quantification"] ~> "QC"

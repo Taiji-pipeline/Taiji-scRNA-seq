@@ -21,6 +21,7 @@ library
                        Taiji.Pipeline.SC.RNASeq.Functions
                        Taiji.Pipeline.SC.RNASeq.Functions.Preprocess
                        Taiji.Pipeline.SC.RNASeq.Functions.Align
+                       Taiji.Pipeline.SC.RNASeq.Functions.Clustering
                        Taiji.Pipeline.SC.RNASeq.Functions.Quantification
                        Taiji.Pipeline.SC.RNASeq.Functions.QC
                        Taiji.Pipeline.SC.RNASeq.Functions.Utils

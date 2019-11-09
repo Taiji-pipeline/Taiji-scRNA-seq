@@ -80,9 +80,10 @@ quantification input = do
             streamBam (bam^.location) .| bamToBedC hdr .|
             groupOnC (fst . getIndex . fromJust . (^.name)) .|
             mapMC ( \x -> do
-                ((row, umi, dupRate), annoCount) <- runConduit $ x .|
+                ((row, umi, dupRate), annoCount') <- runConduit $ x .|
                     zipSinks (getGeneCount exons) (annotate anno)
-                let mitoRate = fromIntegral (M.findWithDefault undefined Mitochondrial annoCount) / fromIntegral umi
+                let mitoRate = M.findWithDefault undefined Mitochondrial annoCount / fromIntegral umi
+                    annoCount = fmap (((1 - dupRate)*) . fromIntegral) annoCount'
                 return (row, QC (fst row) umi (length $ snd row) dupRate
                     mitoRate 0 annoCount)
             ) .| zipSinks outputMat outputQC

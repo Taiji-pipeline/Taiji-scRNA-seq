@@ -48,7 +48,7 @@ data QC = QC
     , _dupRate :: Double
     , _mitoRate :: Double
     , _doubletScore :: Double
-    , _genomics_context :: M.Map Annotation Int }
+    , _genomics_context :: M.Map Annotation Double }
 
 -- | A region may have multiple annotations.
 data Annotation = CDS
@@ -81,7 +81,7 @@ showQC QC{..} = B.intercalate "\t" $
     , toShortest _dupRate
     , toShortest _mitoRate
     , toShortest _doubletScore
-    ] ++ map (B.pack . show) dat
+    ] ++ map toShortest dat
   where
     dat = map (\x -> M.findWithDefault 0 x _genomics_context)
         [CDS, UTR, Intron, Intergenic, Ribosomal, Mitochondrial]
@@ -94,5 +94,5 @@ readQC fl = do
     toQC x = QC (x!!0) (readInt $ x!!1) (readInt $ x!!2)
         (readDouble $ x!!3) (readDouble $ x!!4) (readDouble $ x!!5) $ M.fromList $
         zip [CDS, UTR, Intron, Intergenic, Ribosomal, Mitochondrial] $
-        map readInt $ drop 6 x
+        map readDouble $ drop 6 x
     
