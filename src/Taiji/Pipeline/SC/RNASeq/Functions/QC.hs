@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds         #-}
 
-module Taiji.Pipeline.SC.DropSeq.Functions.QC
+module Taiji.Pipeline.SC.RNASeq.Functions.QC
     (plotQC) where
 
 import qualified Data.Text as T
@@ -12,10 +12,10 @@ import Taiji.Prelude
 import Taiji.Utils.Plot
 import Taiji.Utils.Plot.Vega
 import qualified Taiji.Utils.DataFrame as DF
-import           Taiji.Pipeline.SC.DropSeq.Types
+import           Taiji.Pipeline.SC.RNASeq.Types
 
 {-
-dupRate :: DropSeqConfig config
+dupRate :: SCRNASeqConfig config
         => [(RNASeq S (a, [Double], b))]
         -> ReaderT config IO ()
 dupRate es = do
@@ -27,8 +27,8 @@ dupRate es = do
     in (name, e^.replicates._2.files._2)
     -}
 
-plotQC :: DropSeqConfig config
-       => [RNASeq S (File '[] 'Tsv, File '[] 'Tsv)]
+plotQC :: SCRNASeqConfig config
+       => [RNASeq S (a, File '[] 'Tsv)]
        -> ReaderT config IO ()
 plotQC [] = return ()
 plotQC inputs = do

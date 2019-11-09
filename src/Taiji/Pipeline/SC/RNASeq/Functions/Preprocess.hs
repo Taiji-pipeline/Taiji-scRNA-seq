@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 
-module Taiji.Pipeline.SC.DropSeq.Functions.Preprocess
+module Taiji.Pipeline.SC.RNASeq.Functions.Preprocess
     ( readInput
     , getFastq
     , extractBarcode
@@ -21,16 +21,16 @@ import Bio.Pipeline.Barcode (deBarcode, unBarCode)
 import qualified Bio.Data.Fastq as F
 import qualified Data.HashMap.Strict                  as M
 
-import           Taiji.Pipeline.SC.DropSeq.Types
+import           Taiji.Pipeline.SC.RNASeq.Types
 import Taiji.Prelude
 
 type RAWInput = RNASeq N [Either SomeFile (SomeFile, SomeFile)]
 
-readInput :: DropSeqConfig config
+readInput :: SCRNASeqConfig config
           => () -> ReaderT config IO [RAWInput]
 readInput _ = do
-    input <- asks _dropseq_input 
-    liftIO $ simpleInputReader input "drop-seq" RNASeq
+    input <- asks _scrnaseq_input 
+    liftIO $ simpleInputReader input "scRNA-seq" RNASeq
 
 getFastq :: [RAWInput]
          -> [RNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)]
@@ -41,22 +41,23 @@ getFastq inputs = concatMap split $ concatMap split $
         filter (\(x,y) -> getFileType x == Fastq && getFileType y == Fastq) $
         rights fls
 
-extractBarcode :: DropSeqConfig config
+extractBarcode :: SCRNASeqConfig config
                => RNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)
                -> ReaderT config IO (RNASeq S (File '[Gzip] 'Fastq))
 extractBarcode input = input & replicates.traverse.files %%~ fun
   where
     fun (flRead1, flRead2) = do
-        outdir <- asks ((<> "/Preprocess") . _dropseq_output_dir) >>= getPath
-        lenCellBc <- asks _dropseq_cell_barcode_length
-        lenUmi <- asks _dropseq_molecular_barcode_length
+        outdir <- asks ((<> "/Preprocess") . _scrnaseq_output_dir) >>= getPath
+        qdir <- qcDir
+        lenCellBc <- asks _scrnaseq_cell_barcode_length
+        lenUmi <- asks _scrnaseq_molecular_barcode_length
         liftIO $ do
             shelly $ test_px "umi_tools" >>= \case
                 True -> return ()
                 False -> error "Please install umi_tools: https://github.com/CGATOxford/UMI-tools"
-            let output = printf "%s/%s_extract.fastq.gz" outdir (T.unpack $ input^.eid)
+            let output = printf "%s/%s_demux.fastq.gz" outdir (T.unpack $ input^.eid)
                 whitelistFl = printf "%s/%s_whitelist.tsv" outdir (T.unpack $ input^.eid)
-                plt = printf "%s/%s_whitelist" outdir (T.unpack $ input^.eid)
+                plt = printf "%s/%s_knee_plot" qdir (T.unpack $ input^.eid)
             whitelist <- getWhiteList lenCellBc lenUmi (read1^.location) plt
             saveWhiteList whitelistFl whitelist
             runResourceT $ runConduit $ zipSources

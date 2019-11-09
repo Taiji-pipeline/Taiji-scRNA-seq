@@ -17,14 +17,14 @@ Flag exe
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Taiji.Pipeline.SC.DropSeq
-                       Taiji.Pipeline.SC.DropSeq.Functions
-                       Taiji.Pipeline.SC.DropSeq.Functions.Preprocess
-                       Taiji.Pipeline.SC.DropSeq.Functions.Align
-                       Taiji.Pipeline.SC.DropSeq.Functions.Quantification
-                       Taiji.Pipeline.SC.DropSeq.Functions.QC
-                       Taiji.Pipeline.SC.DropSeq.Functions.Utils
-                       Taiji.Pipeline.SC.DropSeq.Types
+  exposed-modules:     Taiji.Pipeline.SC.RNASeq
+                       Taiji.Pipeline.SC.RNASeq.Functions
+                       Taiji.Pipeline.SC.RNASeq.Functions.Preprocess
+                       Taiji.Pipeline.SC.RNASeq.Functions.Align
+                       Taiji.Pipeline.SC.RNASeq.Functions.Quantification
+                       Taiji.Pipeline.SC.RNASeq.Functions.QC
+                       Taiji.Pipeline.SC.RNASeq.Functions.Utils
+                       Taiji.Pipeline.SC.RNASeq.Types
 
   build-depends:       base >= 4.7 && < 5
                      , aeson
@@ -46,6 +46,7 @@ library
                      , HsHTSLib
                      , IntervalMap
                      , mtl
+                     , jmacro
                      , singletons >= 2.5
                      , shelly
                      , SciFlow >= 0.7.0

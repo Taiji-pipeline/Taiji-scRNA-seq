@@ -2,7 +2,7 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Taiji.Pipeline.SC.DropSeq.Functions.Align
+module Taiji.Pipeline.SC.RNASeq.Functions.Align
     ( mkIndex
     , tagAlign
     , filterNameSortBam
@@ -14,41 +14,41 @@ import System.IO.Temp (withTempFile)
 import qualified Data.Text                            as T
 import Shelly hiding (FilePath)
 
-import           Taiji.Pipeline.SC.DropSeq.Types
+import           Taiji.Pipeline.SC.RNASeq.Types
 import Taiji.Prelude
 
-mkIndex :: DropSeqConfig config => [a] -> ReaderT config IO [a]
+mkIndex :: SCRNASeqConfig config => [a] -> ReaderT config IO [a]
 mkIndex input
     | null input = return input
     | otherwise = do
         genome <- fromMaybe (error "genome fasta not found") <$>
-            asks _dropseq_genome_fasta
-        starIndex <- asks _dropseq_star_index
-        anno <- asks _dropseq_annotation
+            asks _scrnaseq_genome_fasta
+        starIndex <- asks _scrnaseq_star_index
+        anno <- asks _scrnaseq_annotation
         liftIO $ do
             _ <- starMkIndex "STAR" starIndex [genome] anno 100
             return input
 
-tagAlign :: DropSeqConfig config
+tagAlign :: SCRNASeqConfig config
          => RNASeq S (File '[Gzip] 'Fastq)
          -> ReaderT config IO (RNASeq S (File '[] 'Bam))
 tagAlign input = do
-    dir <- asks ((<> "/Bam") . _dropseq_output_dir) >>= getPath
-    idx <- asks _dropseq_star_index
+    dir <- asks ((<> "/Bam") . _scrnaseq_output_dir) >>= getPath
+    idx <- asks _scrnaseq_star_index
     let outputGenome = printf "%s/%s_rep%d_genome.bam" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
         f fl = starAlign outputGenome idx (Left fl) opt >>=
             return . fst . fromLeft undefined
     input & replicates.traverse.files %%~ liftIO . f
   where
-    opt = defaultSTAROpts & starCores .~ 4 & starTranscriptome .~ Nothing
+    opt = defaultSTAROpts & starCores .~ 8 & starTranscriptome .~ Nothing
 
 -- | Filter bad quality reads and name sort Bam file.
-filterNameSortBam :: DropSeqConfig config
+filterNameSortBam :: SCRNASeqConfig config
                   => RNASeq S (File '[] 'Bam)
                   -> ReaderT config IO (RNASeq S (File '[NameSorted] 'Bam))
 filterNameSortBam input = do
-    dir <- asks ((<> "/Bam") . _dropseq_output_dir) >>= getPath
+    dir <- asks ((<> "/Bam") . _scrnaseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_filt.bam" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
     input & replicates.traverse.files %%~ liftIO . ( \fl -> do

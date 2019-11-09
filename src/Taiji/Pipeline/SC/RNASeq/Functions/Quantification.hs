@@ -2,19 +2,22 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-module Taiji.Pipeline.SC.DropSeq.Functions.Quantification
-    (quantification) where
+{-# LANGUAGE QuasiQuotes #-}
+module Taiji.Pipeline.SC.RNASeq.Functions.Quantification
+    ( quantification
+    , removeDoublet
+    ) where
 
 import           Bio.Data.Bam
 import           Bio.Data.Bed
 import           Bio.Utils.Misc (readInt)
 import           Bio.Data.Bed.Types
 import Data.Char (toLower)
+import Language.Javascript.JMacro
 import           Bio.Pipeline
 import           Bio.RealWorld.GENCODE
 import           Data.Conduit.Internal (zipSinks)
 import Data.ByteString.Lex.Integral (packDecimal)
-import qualified Data.Vector.Unboxed as U
 import Data.List.Ordered
 import qualified Data.ByteString.Char8                as B
 import           Data.CaseInsensitive                 (original)
@@ -23,13 +26,19 @@ import qualified Data.IntMap.Strict as I
 import qualified Data.IntervalMap.Strict              as IM
 import qualified Data.HashSet as S
 import qualified Data.Text                            as T
+import Shelly (shelly, run_)
 
-import Taiji.Prelude
+import Taiji.Prelude hiding (_cell_barcode)
 import Taiji.Utils
-import           Taiji.Pipeline.SC.DropSeq.Types
-import Taiji.Pipeline.SC.DropSeq.Functions.Utils
+import           Taiji.Pipeline.SC.RNASeq.Types
+import Taiji.Pipeline.SC.RNASeq.Functions.Utils
+import Taiji.Utils.Plot
+import Taiji.Utils.Plot.Vega
 
 type ExonTree = BEDTree [Int]
+
+passQC :: QC -> Bool
+passQC QC{..} = _mitoRate <= 0.05 && _uniq_gene >= 200
 
 mkExonTree :: [Gene] -> ExonTree
 mkExonTree genes = bedToTree (++) $ concat $ zipWith f [0..] genes
@@ -37,73 +46,120 @@ mkExonTree genes = bedToTree (++) $ concat $ zipWith f [0..] genes
     f i Gene{..} = map ( \(a,b) -> (asBed geneChrom a b :: BED3, [i]) ) $
         nubSort $ concatMap transExon geneTranscripts
 
-data QC = QC
-    { _cell_barcode :: B.ByteString
-    , _dupRate :: Double
-    , _num_umi :: Int
-    , _genomics_context :: M.Map Annotation Int }
-
-showQC :: QC -> B.ByteString
-showQC QC{..} = B.intercalate "\t" $ (_cell_barcode:) $ map (B.pack . show) $
-    _dupRate : map fromIntegral (_num_umi : dat)
-  where
-    dat = map (\x -> M.findWithDefault 0 x _genomics_context)
-        [CDS, UTR, Intron, Intergenic, Ribosomal, Mitochondrial]
-
-quantification :: DropSeqConfig config
+quantification :: SCRNASeqConfig config
                => RNASeq S (File '[NameSorted] 'Bam)
                -> ReaderT config IO ( RNASeq S
-                  ( File '[] 'Tsv
-                  , File '[] 'Tsv ) )
+                  ( ( File '[] 'Tsv       
+                    , File '[Gzip] 'Other )-- ^ quantification
+                  , File '[] 'Tsv  ) )   -- ^ QC
 quantification input = do
-    dir <- asks ((<> "/Quantification/") . _dropseq_output_dir) >>= getPath
-    let output = printf "%s/%s_rep%d_quant.tsv" dir (T.unpack $ input^.eid)
+    dir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
+    dir2 <- qcDir
+    let output = printf "%s/%s_rep%d.mat.gz" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
-        qc = printf "%s/%s_rep%d_qc.tsv" dir (T.unpack $ input^.eid)
+        idx = printf "%s/%s_rep%d_col_names.tsv" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
-    anno_f <- asks _dropseq_annotation
+        qc = printf "%s/%s_rep%d_qc.tsv" dir2 (T.unpack $ input^.eid)
+            (input^.replicates._1)
+    anno_f <- asks _scrnaseq_annotation
 
     input & replicates.traverse.files %%~ liftIO . ( \bam -> do
         hdr <- getBamHeader $ bam^.location
 
         genes <- readGenes anno_f
         anno <- readAnnotations anno_f
-        let exons = mkExonTree genes
-            geneNames = B.intercalate "\t" $ "" : map (original . geneName) genes
-            printRow (nm, val) = B.intercalate "\t" $ nm :
-                map (fromJust . packDecimal)
-                (U.toList $ U.replicate (length genes) 0 U.// val)
-            outputMat = mapC fst .| (yield geneNames >> mapC printRow) .|
-                unlinesAsciiC .| sinkFile output
-            outputQC = (yield header >> mapC (showQC . snd)) .|
-                unlinesAsciiC .| sinkFile qc
-            header = "\tduplication\tUMI\tCDS\tUTR\tIntron\tIntergenic\tRibosomal\tMitochondrial"
 
+        B.writeFile idx $ B.unlines $ map (original . geneName) genes
+
+        let exons = mkExonTree genes
+            outputMat = filterC (passQC . snd) .| mapC fst .|
+                sinkRows' (length genes) (fromJust . packDecimal) output
+            outputQC = (yield qcFileHeader >> mapC (showQC . snd)) .|
+                unlinesAsciiC .| sinkFile qc
         _ <- runResourceT $ runConduit $
             streamBam (bam^.location) .| bamToBedC hdr .|
             groupOnC (fst . getIndex . fromJust . (^.name)) .|
             mapMC ( \x -> do
                 ((row, umi, dupRate), annoCount) <- runConduit $ x .|
                     zipSinks (getGeneCount exons) (annotate anno)
-                return (row, QC (fst row) dupRate umi annoCount)
+                let mitoRate = fromIntegral (M.findWithDefault undefined Mitochondrial annoCount) / fromIntegral umi
+                return (row, QC (fst row) umi (length $ snd row) dupRate
+                    mitoRate 0 annoCount)
             ) .| zipSinks outputMat outputQC
-        return ( location .~ output $ emptyFile
+        return ( (location .~ idx $ emptyFile, location .~ output $ emptyFile)
                , location .~ qc $ emptyFile )
         )
 
-{-
-mkTable :: DropSeqConfig config
-        => RNASeq S (File '[] 'Other , File '[] 'Tsv)
-        -> RNASeq S (File '[] 'Tsv)
-mkTable input = do
-    dir <- asks ((<> "/Quantification/") . _dropseq_output_dir) >>= getPath
-    let output = printf "%s/%s_rep%d_quant.tsv" dir (T.unpack $ input^.eid)
+removeDoublet :: SCRNASeqConfig config
+              => RNASeq S ( ( File '[] 'Tsv, File '[Gzip] 'Other)
+                            , File '[] 'Tsv  )
+              -> ReaderT config IO ( RNASeq S
+                 ( ( File '[] 'Tsv       
+                   , File '[Gzip] 'Other ) 
+                 , File '[] 'Tsv  ) )
+removeDoublet input = do
+    outdir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
+    dir <- qcDir
+    let qcFile = dir <> "qc_with_dsc_" <> T.unpack (input^.eid) <> "_rep" <>
+            show (input^.replicates._1) <> ".tsv"
+        qcPlot = dir <> "doublet_" <> T.unpack (input^.eid) <> "_rep" <>
+            show (input^.replicates._1) <> ".html"
+        output = printf "%s/%s_rep%d_no_doublet.mat.gz" outdir (T.unpack $ input^.eid)
             (input^.replicates._1)
-    anno_f <- asks _dropseq_annotation
+    input & replicates.traverse.files %%~ liftIO . ( \((idx, matFl), qcFl) -> do
+        doubletScore <- detectDoublet qcFile qcPlot (qcFl^.location) (matFl^.location)
+        mat <- mkSpMatrix id (matFl^.location)
+        let f x = M.findWithDefault 0 x doubletScore <= 0.5
+            n = M.size $ M.filter (<=0.5) doubletScore
+        runResourceT $ runConduit $
+            streamRows mat .| filterC (f . fst) .| sinkRows n (_num_col mat) id output
+        return ( (idx, location .~ output $ emptyFile)
+               , location .~ qcFile $ emptyFile )
+        )
 
-    input & replicates.traverse.files %%~ liftIO . ( \(fl, _) -> do
-        anno <- readAnnotations anno_f
-        -}
+detectDoublet :: FilePath
+              -> FilePath
+              -> FilePath
+              -> FilePath
+              -> IO (M.Map B.ByteString Double)
+detectDoublet qcFile qcPlot oldQC matFl = withTemp Nothing $ \tmp -> do
+    shelly $ run_ "taiji-utils" ["doublet", T.pack matFl, T.pack tmp]
+    [probs, threshold, sc, sim_sc] <- B.lines <$> B.readFile tmp
+
+    let th = readDouble threshold
+        dProbs = map readDouble $ B.words probs
+        ds = map readDouble $ B.words sc
+        ds_sim = map readDouble $ B.words sim_sc
+        rate = fromIntegral (length $ filter (>0.5) dProbs) /
+            fromIntegral (length dProbs) * 100 :: Double
+    savePlots qcPlot [ mkHist ds th <> title (printf "doublet percentage: %.1f%%" rate)
+        , mkHist ds_sim th ] []
+
+    mat <- mkSpMatrix id matFl
+    bcs <- runResourceT $ runConduit $ streamRows mat .| mapC fst .| sinkList
+    let doubletScore = M.fromList $ zip bcs dProbs
+
+    qc <- readQC oldQC
+
+    B.writeFile qcFile $ B.unlines $ (qcFileHeader:) $ flip map qc $ \s ->
+        let v = M.findWithDefault 0 (_cell_barcode s) doubletScore
+        in showQC s{_doubletScore = v}
+    return doubletScore
+  where
+    mkHist xs ref = plt <> rule
+      where
+        plt = hist xs 100
+        rule = option [jmacroE| {
+            layer: {
+                mark: "rule",
+                data: {values: [{ref: `ref`}]},
+                encoding: {
+                    x: { field: "ref"},
+                    color: {value: "red"},
+                    size: {value: 1}
+                }
+            }
+       } |]
 
 getGeneCount :: Monad m
              => ExonTree

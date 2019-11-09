@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell   #-}
-module Taiji.Pipeline.SC.DropSeq ( builder) where
+module Taiji.Pipeline.SC.RNASeq ( builder) where
 
 import           Control.Workflow
 
 import Taiji.Prelude
-import           Taiji.Pipeline.SC.DropSeq.Functions
+import           Taiji.Pipeline.SC.RNASeq.Functions
 
 builder :: Builder ()
 builder = do
@@ -16,10 +16,14 @@ builder = do
     path ["Read_Input", "Get_Fastq", "Extract_Barcode"]
 
     node "Make_Index" 'mkIndex $ return ()
-    nodePar "Align" 'tagAlign $ nCore .= 4
+    nodePar "Align" 'tagAlign $ do
+        nCore .= 8
+        memory .= 50
     nodePar "Filter_Bam" 'filterNameSortBam $ return ()
     nodePar "Quantification" 'quantification $ return ()
-    path ["Extract_Barcode", "Make_Index", "Align", "Filter_Bam", "Quantification"]
+    nodePar "Remove_Doublet" 'removeDoublet $ return ()
+    path ["Extract_Barcode", "Make_Index", "Align", "Filter_Bam"
+        , "Quantification", "Remove_Doublet"]
 
     node "QC" 'plotQC $ return ()
     ["Quantification"] ~> "QC"
