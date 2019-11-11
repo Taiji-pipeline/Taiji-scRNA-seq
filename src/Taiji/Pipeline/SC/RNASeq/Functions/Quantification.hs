@@ -82,7 +82,7 @@ quantification input = do
             mapMC ( \x -> do
                 ((row, umi, dupRate), annoCount') <- runConduit $ x .|
                     zipSinks (getGeneCount exons) (annotate anno)
-                let mitoRate = M.findWithDefault undefined Mitochondrial annoCount / fromIntegral umi
+                let mitoRate = M.findWithDefault 0 Mitochondrial annoCount / fromIntegral umi
                     annoCount = fmap (((1 - dupRate)*) . fromIntegral) annoCount'
                 return (row, QC (fst row) umi (length $ snd row) dupRate
                     mitoRate 0 annoCount)
@@ -113,7 +113,8 @@ removeDoublet input = do
         let f x = M.findWithDefault 0 x doubletScore <= 0.5
             n = M.size $ M.filter (<=0.5) doubletScore
         runResourceT $ runConduit $
-            streamRows mat .| filterC (f . fst) .| sinkRows n (_num_col mat) id output
+            streamRows mat .| filterC (f . fst) .|
+            sinkRows n (_num_col mat) id output
         return ( (idx, location .~ output $ emptyFile)
                , location .~ qcFile $ emptyFile )
         )

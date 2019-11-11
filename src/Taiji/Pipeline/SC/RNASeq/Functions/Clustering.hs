@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -5,21 +6,38 @@
 module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
     ( filterMatrix
     , spectral
+    , clustering
+    , subMatrix
+    , mkExprTable
+    , specificGene
     ) where 
 
 import Data.Singletons.Prelude (Elem)
 import qualified Data.ByteString.Char8 as B
+import Data.List.Ordered (nubSort)
+import           Data.CaseInsensitive                 (original)
+import           Bio.RealWorld.GENCODE (readGenes, Gene(..))
 import Data.ByteString.Lex.Integral (packDecimal)
-import Bio.Utils.Functions (scale)
+import Bio.Utils.Functions (scale, filterFDR)
 import qualified Data.Vector.Unboxed.Mutable as UM
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector as V
+import qualified Data.HashSet as S
+import Data.Binary (decodeFile)
+import Control.Arrow (first)
+import qualified Data.HashMap.Strict as M
 import qualified Data.Text as T
+import Data.Binary (encodeFile)
 import Shelly (shelly, run_)
+import qualified Data.Matrix as Mat
 
 import           Taiji.Pipeline.SC.RNASeq.Types
+import qualified Taiji.Utils.DataFrame as DF
 import Taiji.Prelude
 import Taiji.Utils
+import Taiji.Utils.Plot
+import Taiji.Utils.Plot.ECharts
+import Taiji.Pipeline.SC.ATACSeq.Functions.Utils (computeSS, computeRAS, computeCDF)
 
 filterMatrix :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
              => FilePath
@@ -68,23 +86,23 @@ spectral prefix seed input = do
         return (rownames, location .~ output $ emptyFile)
         )
 
-{-
-clustering :: SCATACSeqConfig config
+clustering :: SCRNASeqConfig config
            => FilePath
-           -> ClustOpt
-           -> SCATACSeq S [(File '[] 'Tsv, File '[Gzip] 'Tsv)]
-           -> ReaderT config IO (SCATACSeq S (File '[] 'Other))
-clustering prefix opt input = do
-    tmp <- asks _scatacseq_tmp_dir
-    dir <- asks ((<> asDir ("/" ++ prefix)) . _scatacseq_output_dir) >>= getPath
+           -> RNASeq S [(File '[] 'Tsv, File '[Gzip] 'Tsv)]
+           -> ReaderT config IO (RNASeq S (File '[] 'Other))
+clustering prefix input = do
+    tmp <- asks _scrnaseq_tmp_dir
+    dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_clusters.bin" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
+        plotFl = printf "%s/%s_rep%d_clusters.html" dir (T.unpack $ input^.eid)
+            (input^.replicates._1)
     input & replicates.traversed.files %%~ liftIO . ( \fl -> do
-        clustering' opt tmp fl >>= encodeFile output
+        cls <- clustering' tmp fl
+        encodeFile output cls
+        plotClusters plotFl cls
         return $ location .~ output $ emptyFile )
-        -}
 
-{-
 clustering' :: Maybe FilePath      -- ^ temp dir
             -> [(File '[] 'Tsv, File '[Gzip] 'Tsv)]   -- ^ lsa input matrix
             -> IO [CellCluster]
@@ -99,7 +117,7 @@ clustering' dir fls = withTempDir dir $ \tmpD -> do
           [ "clust", input, T.pack tmpD <> "/clust"
           , "--embed", T.pack tmpD <> "/embed"
           , "--embed-method", "umap"
-          , "--dim" 50 ]
+          , "--dim", "50" ]
       cells <- runResourceT $ runConduit $ sourceCells .| mapC f .| sinkVector
       clusters <- readClusters $ tmpD <> "/clust"
       return $ zipWith (\i -> CellCluster $ B.pack $ "C" ++ show i) [1::Int ..] $
@@ -114,4 +132,143 @@ clustering' dir fls = withTempDir dir $ \tmpD -> do
     f (i, (bc, dep), [d1,d2,d3,d4,d5]) = Cell i (d1,d2) (d3,d4,d5) bc $ readInt dep
     f _ = error "formatting error"
 {-# INLINE clustering' #-}
--}
+
+plotClusters :: FilePath
+             -> [CellCluster]
+             -> IO ()
+plotClusters output input = do
+    let (nms, num_cells) = unzip $ map (\(CellCluster nm cells) ->
+            (T.pack $ B.unpack nm, fromIntegral $ length cells)) input
+        plt = stackBar $ DF.mkDataFrame ["number of cells"] nms [num_cells]
+    clusters <- sampleCells input
+    case visualizeCluster clusters of
+        [p] -> savePlots output [] $ [p, plt]
+        [p1,p2] -> do
+            let compos = composition input
+            savePlots output [] $ [p1, p2, plt,
+                clusterComposition compos, tissueComposition compos]
+
+-- | Compute the normalized tissue composition for each cluster.
+tissueComposition :: DF.DataFrame Int -> EChart
+tissueComposition = stackBar . DF.map round' . DF.mapCols normalize .
+    DF.transpose . DF.mapCols normalize . DF.map fromIntegral
+  where
+    round' x = fromIntegral (round $ x * 1000 :: Int) / 1000
+    normalize :: V.Vector Double -> V.Vector Double
+    normalize xs | V.all (==0) xs = xs
+                 | otherwise = V.map (/V.sum xs) xs
+
+-- | Compute the cluster composition for each tissue.
+clusterComposition :: DF.DataFrame Int -> EChart
+clusterComposition = stackBar . DF.map round' . DF.mapCols normalize .
+    DF.map fromIntegral
+  where
+    round' x = fromIntegral (round $ x * 1000 :: Int) / 1000
+    normalize :: V.Vector Double -> V.Vector Double
+    normalize xs | V.all (==0) xs = xs
+                 | otherwise = V.map (/V.sum xs) xs
+
+-- | Compute the cluster x tissue composition table.
+composition :: [CellCluster] -> DF.DataFrame Int
+composition clusters = DF.mkDataFrame rownames colnames $
+    flip map rows $ \x -> map (\i -> M.lookupDefault 0 i x) colnames
+  where
+    (rownames, rows) = unzip $ flip map clusters $ \CellCluster{..} ->
+        ( T.pack $ B.unpack _cluster_name
+        , M.fromListWith (+) $ map (\x -> (getName x, 1)) _cluster_member )
+    colnames = nubSort $ concatMap M.keys rows
+    getName Cell{..} =
+        let prefix = fst $ B.breakEnd (=='+') _cell_barcode
+        in if B.null prefix then "" else T.pack $ B.unpack $ B.init prefix
+
+-- | Extract cluster submatrix
+subMatrix :: SCRNASeqConfig config
+          => FilePath   -- ^ Dir
+          -> [RNASeq S (File tags 'Other)]   -- ^ Matrices
+          -> File tag' 'Other   -- Clusters
+          -> ReaderT config IO [RNASeq S (File tags 'Other)]
+subMatrix prefix mats clFl = do
+    dir <- asks _scrnaseq_output_dir >>= getPath . (<> (asDir prefix))
+    liftIO $ do
+        cls <- decodeFile $ clFl^.location
+        mat <- mkSpMatrix id $ head mats ^. replicates._2.files.location
+        let mkSink CellCluster{..} = filterC ((`S.member` ids) . fst) .|
+                (sinkRows (S.size ids) (_num_col mat) id output >> return res)
+              where
+                ids = S.fromList $ map _cell_barcode _cluster_member
+                output = dir <> B.unpack _cluster_name <> ".mat.gz"
+                res = head mats & eid .~ T.pack (B.unpack _cluster_name)
+                                & replicates._2.files.location .~ output
+        runResourceT $ runConduit $ streamMatrices id mats .|
+            sequenceSinks (map mkSink cls)
+
+-- | Stream rows and add sample id to barcodes.
+streamMatrices :: (B.ByteString -> a)   -- ^ Element decoder
+               -> [RNASeq S (File tags 'Other)]
+               -> ConduitT () (Row a) (ResourceT IO) ()
+streamMatrices decoder inputs = forM_ inputs $ \input -> do
+    mat <- liftIO $ mkSpMatrix decoder $ input^.replicates._2.files.location
+    let f x = B.pack (T.unpack $ input^.eid) <> "+" <> x
+    streamRows mat .| mapC (first f)
+
+-- | Combine expression data into a table and output
+mkExprTable :: SCRNASeqConfig config
+            => FilePath
+            -> [RNASeq S (File '[Gzip] 'Other)]
+            -> ReaderT config IO (Maybe (FilePath, FilePath, FilePath))
+mkExprTable _ [] = return Nothing
+mkExprTable prefix inputs = do
+    dir <- asks _scrnaseq_output_dir >>= getPath . (<> asDir prefix)
+    geneNames <- asks _scrnaseq_annotation >>=
+        liftIO . fmap (map (original . geneName)) . readGenes
+    liftIO $ do
+        let output1 = dir ++ "/gene_expression.tsv"
+            output2 = dir ++ "/gene_specificity.tsv"
+            output3 = dir ++ "/gene_specificity_pvalue.tsv"
+        mat <- fmap transpose $ forM inputs $ \input -> fmap U.toList $
+            computeRAS $ input^.replicates._2.files.location 
+        let (genes, vals) = unzip $ map combine $ groupBy ((==) `on` fst) $
+                sortBy (comparing fst) $ zip geneNames mat
+            expr = DF.mkDataFrame (map (T.pack . B.unpack) genes)
+                (map (^.eid) inputs) vals
+            ss = computeSS expr
+
+        DF.writeTable output1 (T.pack . show) expr
+        DF.writeTable output2 (T.pack . show) ss
+        cdf <- computeCDF expr
+        DF.writeTable output3 (T.pack . show) $ DF.map (lookupP cdf) ss
+        return $ Just (output1, output2, output3)
+  where
+    combine xs = (head gene, foldl1' (zipWith max) vals)
+      where
+        (gene, vals) = unzip xs
+    lookupP (vec, res, n) x | p == 0 = 1 / n
+                            | otherwise = p
+      where
+        p = vec V.! i
+        i = min (V.length vec - 1) $ truncate $ x / res 
+
+-- | Get cell-specific genes
+specificGene :: SCRNASeqConfig config
+             => FilePath
+             -> (FilePath, FilePath, FilePath)
+             -> ReaderT config IO [(T.Text, File '[] 'Tsv)]
+specificGene prefix (_, scoreFl, pvalueFl) = do
+    dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
+    liftIO $ do
+        scores <- DF.readTable scoreFl
+        pvalues <- DF.readTable pvalueFl
+        let table = DF.zip scores pvalues
+            genes = V.fromList $ DF.rowNames table
+            cls = zip (DF.colNames table) $ Mat.toColumns $
+                DF._dataframe_data table
+        forM cls $ \(nm, vec) -> do
+            let output = dir <> T.unpack nm <> "_markers.tsv"
+                (gs, sc, pval) = unzip3 $ fst $ unzip $ V.toList $
+                    filterFDR fdr $ V.zipWith (\g (a,b) -> ((g,a,b), b)) genes vec 
+            DF.writeTable output (T.pack . show) $
+                DF.mkDataFrame gs ["specificity", "pvalue"] $
+                transpose [sc, pval]
+            return (nm, location .~ output $ emptyFile)
+  where
+    fdr = 0.001
