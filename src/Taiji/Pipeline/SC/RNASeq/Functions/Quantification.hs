@@ -101,6 +101,7 @@ removeDoublet :: SCRNASeqConfig config
 removeDoublet input = do
     outdir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
     dir <- qcDir
+    thres <- asks _scrnaseq_doublet_score_cutoff 
     let qcFile = dir <> "qc_with_dsc_" <> T.unpack (input^.eid) <> "_rep" <>
             show (input^.replicates._1) <> ".tsv"
         qcPlot = dir <> "doublet_" <> T.unpack (input^.eid) <> "_rep" <>
@@ -110,8 +111,8 @@ removeDoublet input = do
     input & replicates.traverse.files %%~ liftIO . ( \((idx, matFl), qcFl) -> do
         doubletScore <- detectDoublet qcFile qcPlot (qcFl^.location) (matFl^.location)
         mat <- mkSpMatrix id (matFl^.location)
-        let f x = M.findWithDefault 0 x doubletScore <= 0.5
-            n = M.size $ M.filter (<=0.5) doubletScore
+        let f x = M.findWithDefault 0 x doubletScore <= thres
+            n = M.size $ M.filter (<=thres) doubletScore
         runResourceT $ runConduit $
             streamRows mat .| filterC (f . fst) .|
             sinkRows n (_num_col mat) id output
