@@ -6,10 +6,10 @@
 module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
     ( filterMatrix
     , spectral
+    , mkKNNGraph
     , clustering
     , subMatrix
     , mkExprTable
-    , specificGene
     ) where 
 
 import Data.Singletons.Prelude (Elem)
@@ -86,48 +86,74 @@ spectral prefix seed input = do
         return (rownames, location .~ output $ emptyFile)
         )
 
-clustering :: SCRNASeqConfig config
+mkKNNGraph :: SCRNASeqConfig config
            => FilePath
            -> RNASeq S [(File '[] 'Tsv, File '[Gzip] 'Tsv)]
+           -> ReaderT config IO (RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
+mkKNNGraph prefix input = do
+    dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
+    let output_knn = printf "%s/%s_rep%d_knn.npz" dir (T.unpack $ input^.eid)
+            (input^.replicates._1)
+        output_umap = printf "%s/%s_rep%d_umap.txt" dir (T.unpack $ input^.eid)
+            (input^.replicates._1)
+    input & replicates.traversed.files %%~ liftIO . ( \fls -> do
+        shelly $ run_ "taiji-utils" $
+            [ "knn"
+            , T.pack $ intercalate "," $ map (^.location) $ snd $ unzip fls
+            , T.pack output_knn
+            , "-k", "50"
+            , "--embed", T.pack output_umap
+            , "--thread", "4" ]
+        return ( head $ fst $ unzip fls
+               , location .~ output_knn $ emptyFile
+               , location .~ output_umap $ emptyFile )
+        )
+
+clustering :: SCRNASeqConfig config
+           => FilePath
+           -> RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)
            -> ReaderT config IO (RNASeq S (File '[] 'Other))
 clustering prefix input = do
     tmp <- asks _scrnaseq_tmp_dir
     dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
+    res <- asks _scrnaseq_cluster_resolution 
+    optimizer <- asks _scrnaseq_cluster_optimizer 
     let output = printf "%s/%s_rep%d_clusters.bin" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
         plotFl = printf "%s/%s_rep%d_clusters.html" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
     input & replicates.traversed.files %%~ liftIO . ( \fl -> do
-        cls <- clustering' tmp fl
+        cls <- clustering' tmp optimizer res fl
         encodeFile output cls
         plotClusters plotFl cls
         return $ location .~ output $ emptyFile )
 
 clustering' :: Maybe FilePath      -- ^ temp dir
-            -> [(File '[] 'Tsv, File '[Gzip] 'Tsv)]   -- ^ lsa input matrix
+            -> Optimizer 
+            -> Double  -- ^ Clustering resolution
+            -> (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)
             -> IO [CellCluster]
-clustering' dir fls = withTempDir dir $ \tmpD -> do
+clustering' dir method res (idx, knn, umap) = withTemp dir $ \tmpFl -> do
       let sourceCells = getZipSource $ (,,) <$>
               ZipSource (iterateC succ 0) <*>
               ZipSource seqDepthC <*>
-              ZipSource ( sourceFile (tmpD <> "/embed") .| linesUnboundedAsciiC .|
+              ZipSource ( sourceFile (umap^.location) .| linesUnboundedAsciiC .|
                 mapC (map readDouble . B.split '\t') )
-          input = T.pack $ intercalate "," $ map (^.location) mats
-      shelly $ run_ "taiji-utils" $
-          [ "clust", input, T.pack tmpD <> "/clust"
-          , "--embed", T.pack tmpD <> "/embed"
-          , "--embed-method", "umap"
-          , "--dim", "50" ]
+      shelly $ run_ "taiji-utils"
+          [ "clust", T.pack $ knn^.location, T.pack tmpFl
+          , "--res"
+          , T.pack $ show res
+          , "--optimizer"
+          , case method of
+              RBConfiguration -> "RB"
+              CPM -> "CPM"
+          ]
       cells <- runResourceT $ runConduit $ sourceCells .| mapC f .| sinkVector
-      clusters <- readClusters $ tmpD <> "/clust"
+      clusters <- map (map readInt . B.split ',') . B.lines <$> B.readFile tmpFl
       return $ zipWith (\i -> CellCluster $ B.pack $ "C" ++ show i) [1::Int ..] $
           map (map (cells V.!)) clusters
   where
-    coverage = head $ fst $ unzip fls
-    mats = snd $ unzip fls
-    readClusters fl = map (map readInt . B.split ',') . B.lines <$>
-        B.readFile fl
-    seqDepthC = sourceFile (coverage^.location) .| linesUnboundedAsciiC .|
+    seqDepthC = sourceFile (idx^.location) .| linesUnboundedAsciiC .|
         mapC ((\[a,b] -> (a,b)) . B.split '\t')
     f (i, (bc, dep), [d1,d2,d3,d4,d5]) = Cell i (d1,d2) (d3,d4,d5) bc $ readInt dep
     f _ = error "formatting error"
@@ -248,6 +274,7 @@ mkExprTable prefix inputs = do
         p = vec V.! i
         i = min (V.length vec - 1) $ truncate $ x / res 
 
+{-
 -- | Get cell-specific genes
 specificGene :: SCRNASeqConfig config
              => FilePath
@@ -272,3 +299,4 @@ specificGene prefix (_, scoreFl, pvalueFl) = do
             return (nm, location .~ output $ emptyFile)
   where
     fdr = 0.001
+    -}

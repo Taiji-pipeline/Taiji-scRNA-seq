@@ -59,12 +59,16 @@ builder = do
             let prefix = "/Cluster/"
             fmap Just $ filterMatrix prefix input >>= spectral prefix Nothing
         |] $ return ()
-    node "Merged_Cluster" [| \case
+    node "Merged_Make_KNN" [| \case
         Nothing -> return Nothing
-        Just input -> fmap Just $ clustering "/Cluster/" $
+        Just input -> fmap Just $ mkKNNGraph "/Cluster/" $
             input & replicates.traverse.files %~ return
         |] $ return ()
-    path ["Remove_Doublet", "Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Cluster"]
+    node "Merged_Cluster" [| \case
+        Nothing -> return Nothing
+        Just input -> Just <$> clustering "/Cluster/" input
+        |] $ return ()
+    path ["Remove_Doublet", "Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN", "Merged_Cluster"]
 
     node "Extract_Sub_Matrix" [| \(mats, cl) -> case cl of
         Nothing -> return []
@@ -74,12 +78,8 @@ builder = do
             subMatrix "/temp/" mats' $ clFl^.replicates._2.files
         |] $ return ()
     node "Make_Expr_Table" [| mkExprTable "/Quantification/" |] $ return ()
-    node "Marker_Gene" [| \case
-        Nothing -> return Nothing
-        Just x -> fmap Just $ specificGene "/Marker/" x
-        |] $ return ()
     ["Remove_Doublet", "Merged_Cluster"] ~> "Extract_Sub_Matrix"
-    path ["Extract_Sub_Matrix", "Make_Expr_Table", "Marker_Gene"]
+    path ["Extract_Sub_Matrix", "Make_Expr_Table"]
 
     node "QC" 'plotQC $ return ()
     ["Quantification"] ~> "QC"
