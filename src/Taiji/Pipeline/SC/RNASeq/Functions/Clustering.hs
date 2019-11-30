@@ -155,7 +155,7 @@ clustering' dir method res (idx, knn, umap) = withTemp dir $ \tmpFl -> do
   where
     seqDepthC = sourceFile (idx^.location) .| linesUnboundedAsciiC .|
         mapC ((\[a,b] -> (a,b)) . B.split '\t')
-    f (i, (bc, dep), [d1,d2,d3,d4,d5]) = Cell i (d1,d2) (d3,d4,d5) bc $ readInt dep
+    f (i, (bc, dep), [d1,d2]) = Cell i (d1,d2) bc $ readInt dep
     f _ = error "formatting error"
 {-# INLINE clustering' #-}
 
