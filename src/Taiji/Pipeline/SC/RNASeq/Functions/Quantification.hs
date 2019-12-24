@@ -82,7 +82,9 @@ quantification input = do
             mapMC ( \x -> do
                 ((row, umi, dupRate), annoCount') <- runConduit $ x .|
                     zipSinks (getGeneCount exons) (annotate anno)
-                let mitoRate = M.findWithDefault 0 Mitochondrial annoCount / fromIntegral umi
+                let mitoRate = if umi == 0
+                        then 0 
+                        else M.findWithDefault 0 Mitochondrial annoCount / fromIntegral umi
                     annoCount = fmap (((1 - dupRate)*) . fromIntegral) annoCount'
                 return (row, QC (fst row) umi (length $ snd row) dupRate
                     mitoRate 0 annoCount)
@@ -175,8 +177,7 @@ getGeneCount exons = do
     let c = I.toList $ fmap M.size geneCount
         uniqUMI = foldl' (+) 0 $ map snd c
         totalUMI = fromIntegral $ foldl' (+) 0 $ fmap (foldl' (+) 0) geneCount
-        dupRate = 1 - fromIntegral uniqUMI / totalUMI
-
+        dupRate = if totalUMI == 0 then 0 else 1 - fromIntegral uniqUMI / totalUMI
     return ((cellBc, c), uniqUMI, dupRate)
   where
     reduce m (idx, umi) = I.alter f idx m

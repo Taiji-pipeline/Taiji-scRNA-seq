@@ -79,7 +79,7 @@ spectral prefix seed input = do
     let output = printf "%s/%s_rep%d_spectral.tsv.gz" dir
             (T.unpack $ input^.eid) (input^.replicates._1)
     input & replicates.traversed.files %%~ liftIO . ( \(rownames, fl) -> do
-        shelly $ run_ "taiji-utils" $ ["reduce", "--method", "spectral"
+        shelly $ run_ "taiji-utils" $ ["reduce",
             , "--distance", "cosine"
             , T.pack $ fl^.location, T.pack output] ++ maybe []
             (\x -> ["--seed", T.pack $ show x]) seed

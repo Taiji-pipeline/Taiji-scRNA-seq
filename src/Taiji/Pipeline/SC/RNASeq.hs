@@ -19,6 +19,10 @@ builder = do
     nodePar "Demultiplex" 'extractBarcode $ return ()
     path ["Read_Input", "Get_Fastq", "Demultiplex"]
 
+    node "Get_Demulti_Fastq" [| \(input, fq) -> return $
+        getDemultiplexedFastq input ++ fq |] $ return ()
+    ["Read_Input", "Demultiplex"] ~> "Get_Demulti_Fastq"
+
     node "Make_Index" 'mkIndex $ return ()
     nodePar "Align" 'tagAlign $ do
         nCore .= 8
@@ -26,20 +30,8 @@ builder = do
     nodePar "Filter_Bam" 'filterNameSortBam $ return ()
     nodePar "Quantification" 'quantification $ memory .= 8
     nodePar "Remove_Doublet" 'removeDoublet $ return ()
-    path ["Demultiplex", "Make_Index", "Align", "Filter_Bam"
+    path ["Get_Demulti_Fastq", "Make_Index", "Align", "Filter_Bam"
         , "Quantification", "Remove_Doublet"]
-
-    {-
-    nodePar "Reduce_Dimension" [| \input -> do
-        let input' = input & replicates.traverse.files %~ snd . fst
-            prefix = "/Cluster/"
-        filterMatrix prefix input' >>= spectral prefix Nothing 
-        |] $ return ()
-    nodePar "Cluster" [| \input -> clustering "/Cluster/" $
-        input & replicates.traverse.files %~ return
-        |] $ return ()
-    path ["Remove_Doublet", "Reduce_Dimension", "Cluster"]
-    -}
 
     node "Merge_Matrix" [| \mats -> if length mats < 1
         then return Nothing

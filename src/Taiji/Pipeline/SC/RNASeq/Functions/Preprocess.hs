@@ -6,6 +6,7 @@
 module Taiji.Pipeline.SC.RNASeq.Functions.Preprocess
     ( readInput
     , getFastq
+    , getDemultiplexedFastq
     , extractBarcode
     ) where
 
@@ -14,7 +15,7 @@ import           Bio.Data.Experiment.Types
 import           Bio.Pipeline
 import qualified Data.Text as T
 import Shelly hiding (FilePath)
-import Data.Either (rights)
+import Data.Either (lefts, rights)
 import qualified Data.ByteString.Char8                as B
 import qualified Data.HashMap.Strict                  as M
 
@@ -39,6 +40,13 @@ getFastq inputs = concatMap split $ concatMap split $
         filter (\(x,y) -> getFileType x == Fastq && getFileType y == Fastq) $
         rights fls
 
+getDemultiplexedFastq :: [RAWInput] -> [RNASeq S (File '[Gzip] 'Fastq)]
+getDemultiplexedFastq inputs = concatMap split $ concatMap split $
+    inputs & mapped.replicates.mapped.files %~ f
+  where
+    f fls = map fromSomeFile $ filter (\x -> getFileType x == Fastq) $ lefts fls
+
+-- | Extract barcode: @barcode+umi:seq_name
 extractBarcode :: SCRNASeqConfig config
                => RNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)
                -> ReaderT config IO (RNASeq S (File '[Gzip] 'Fastq))
