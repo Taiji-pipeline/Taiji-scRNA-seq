@@ -5,27 +5,12 @@ module Taiji.Pipeline.SC.RNASeq.Functions.QC
     (plotQC) where
 
 import qualified Data.Text as T
-import qualified Data.Matrix as M
-import qualified Data.Vector as V
+import Control.Arrow (second)
 
 import Taiji.Prelude
 import Taiji.Utils.Plot
 import Taiji.Utils.Plot.Vega
-import qualified Taiji.Utils.DataFrame as DF
 import           Taiji.Pipeline.SC.RNASeq.Types
-
-{-
-dupRate :: SCRNASeqConfig config
-        => [(RNASeq S (a, [Double], b))]
-        -> ReaderT config IO ()
-dupRate es = do
-    dir <- qcDir
-    let output = dir ++ "qc_duplication.html"
-    
-    vegaViolin $ flip map es $ \e ->
-    let name = (e^.eid) <> "_rep" <> T.pack (show (e^.replicates._1))
-    in (name, e^.replicates._2.files._2)
-    -}
 
 plotQC :: SCRNASeqConfig config
        => [RNASeq S (a, File '[] 'Tsv)]
@@ -33,9 +18,15 @@ plotQC :: SCRNASeqConfig config
 plotQC [] = return ()
 plotQC inputs = do
     dir <- qcDir
-    forM_ inputs $ \input -> liftIO $ do
-        let output = printf "%s/%s_rep%d_qc.html" dir (T.unpack $ input^.eid)
-                (input^.replicates._1)
-        df <- DF.readTable $ input^.replicates._2.files._2.location
-        let plts = flip map (M.toColumns $ DF._dataframe_data df) $ \col -> hist (V.toList col) 100
-        savePlots output plts []
+    qc <- forM inputs $ \input -> liftIO $ do
+        let name = (input^.eid) <> "_rep" <> T.pack (show (input^.replicates._1))
+        qc <- fmap (filter passQC) $ readQC $ input^.replicates._2.files._2.location
+        return (name, qc)
+    liftIO $ savePlots (dir ++ "/QC.html")
+        [ violin (map (second $ map $ fromIntegral . _num_umi) qc)
+            defaultAxis{_axis_type="log", _axis_title="number of UMI"}
+        , violin (map (second $ map $ fromIntegral . _uniq_gene) qc)
+            defaultAxis{_axis_title="number of gene"}
+        , violin (map (second $ map _dupRate) qc)
+            defaultAxis{_axis_title="duplication rate"}
+        ] []

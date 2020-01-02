@@ -58,7 +58,6 @@ library
                      , unordered-containers
                      , vector
                      , Taiji-utils
-                     , Taiji-scATAC-seq
   default-language:    Haskell2010
   ghc-options:       -Wall
                      -fno-warn-unticked-promoted-constructors

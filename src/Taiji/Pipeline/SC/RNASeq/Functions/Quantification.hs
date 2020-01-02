@@ -37,9 +37,6 @@ import Taiji.Utils.Plot.Vega
 
 type ExonTree = BEDTree [Int]
 
-passQC :: QC -> Bool
-passQC QC{..} = _mitoRate <= 0.05 && _uniq_gene >= 200
-
 mkExonTree :: [Gene] -> ExonTree
 mkExonTree genes = bedToTree (++) $ concat $ zipWith f [0..] genes
   where
@@ -54,7 +51,7 @@ quantification :: SCRNASeqConfig config
                   , File '[] 'Tsv  ) )   -- ^ QC
 quantification input = do
     dir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
-    dir2 <- qcDir
+    dir2 <- tempDir
     let output = printf "%s/%s_rep%d.mat.gz" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
         idx = printf "%s/%s_rep%d_col_names.tsv" dir (T.unpack $ input^.eid)
@@ -104,7 +101,7 @@ removeDoublet input = do
     outdir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
     dir <- qcDir
     thres <- asks _scrnaseq_doublet_score_cutoff 
-    let qcFile = dir <> "qc_with_dsc_" <> T.unpack (input^.eid) <> "_rep" <>
+    let qcFile = dir <> "qc" <> T.unpack (input^.eid) <> "_rep" <>
             show (input^.replicates._1) <> ".tsv"
         qcPlot = dir <> "doublet_" <> T.unpack (input^.eid) <> "_rep" <>
             show (input^.replicates._1) <> ".html"
@@ -212,8 +209,8 @@ readAnnotations input = do
         rRNA | ty == "rRNA" = [Ribosomal]
              | otherwise = []
         ty = B.init $ B.drop 2 $ fromJust $ lookup "gene_type" $
-            map (B.break isSpace . strip) $ B.split ';' info
-        [chr,_,nm,start,end,_,_,_,info] = B.split '\t' l
+            map (B.break isSpace . strip) $ B.split ';' anno
+        [chr,_,nm,start,end,_,_,_,anno] = B.split '\t' l
         strip = fst . B.spanEnd isSpace . B.dropWhile isSpace
         isSpace = (== ' ')
 

@@ -18,7 +18,7 @@ import Data.List.Ordered (nubSort)
 import           Data.CaseInsensitive                 (original)
 import           Bio.RealWorld.GENCODE (readGenes, Gene(..))
 import Data.ByteString.Lex.Integral (packDecimal)
-import Bio.Utils.Functions (scale, filterFDR)
+import Bio.Utils.Functions (scale)
 import qualified Data.Vector.Unboxed.Mutable as UM
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector as V
@@ -29,15 +29,13 @@ import qualified Data.HashMap.Strict as M
 import qualified Data.Text as T
 import Data.Binary (encodeFile)
 import Shelly (shelly, run_)
-import qualified Data.Matrix as Mat
 
-import           Taiji.Pipeline.SC.RNASeq.Types
+import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..))
 import qualified Taiji.Utils.DataFrame as DF
 import Taiji.Prelude
 import Taiji.Utils
 import Taiji.Utils.Plot
 import Taiji.Utils.Plot.ECharts
-import Taiji.Pipeline.SC.ATACSeq.Functions.Utils (computeSS, computeRAS, computeCDF)
 
 filterMatrix :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
              => FilePath
@@ -79,9 +77,9 @@ spectral prefix seed input = do
     let output = printf "%s/%s_rep%d_spectral.tsv.gz" dir
             (T.unpack $ input^.eid) (input^.replicates._1)
     input & replicates.traversed.files %%~ liftIO . ( \(rownames, fl) -> do
-        shelly $ run_ "taiji-utils" $ ["reduce",
+        shelly $ run_ "taiji-utils" $ [ "reduce"
             , "--distance", "cosine"
-            , T.pack $ fl^.location, T.pack output] ++ maybe []
+            , T.pack $ fl^.location, T.pack output ] ++ maybe []
             (\x -> ["--seed", T.pack $ show x]) seed
         return (rownames, location .~ output $ emptyFile)
         )
