@@ -17,7 +17,7 @@ module Taiji.Pipeline.SC.RNASeq.Types
 import           Bio.Pipeline.Utils
 import qualified Data.ByteString.Char8                as B
 import Data.Hashable
-import qualified Data.Map.Strict                  as M
+import qualified Data.HashMap.Strict                  as M
 import           GHC.Generics (Generic)
 import Data.Binary
 import Data.Aeson
@@ -50,15 +50,13 @@ data QC = QC
     , _dupRate :: Double
     , _mitoRate :: Double
     , _doubletScore :: Double
-    , _genomics_context :: M.Map Annotation Double }
+    , _count_table :: M.HashMap Annotation Int }
 
 passQC :: QC -> Bool
-passQC QC{..} = _mitoRate <= 0.05 && _uniq_gene >= 200
+passQC QC{..} = _mitoRate <= 0.1 && _uniq_gene >= 200
 
 -- | A region may have multiple annotations.
-data Annotation = CDS
-                | UTR
-                | Exon
+data Annotation = Exon
                 | Intron
                 | Ribosomal
                 | Mitochondrial
@@ -76,7 +74,7 @@ instance Binary Annotation
 qcFileHeader :: B.ByteString
 qcFileHeader = B.intercalate "\t" $
   [ "Num_UMI", "Num_Gene", "duplication_rate", "chrM_rate", "doublet_score"
-  , "tCDS", "UTR", "Intron", "Intergenic", "Ribosomal", "Mitochondrial" ]
+  , "Exon", "Intron", "Intergenic", "Ribosomal", "Mitochondrial" ]
 
 showQC :: QC -> B.ByteString
 showQC QC{..} = B.intercalate "\t" $
@@ -86,18 +84,19 @@ showQC QC{..} = B.intercalate "\t" $
     , toShortest _dupRate
     , toShortest _mitoRate
     , toShortest _doubletScore
-    ] ++ map toShortest dat
+    ] ++ map (fromJust . packDecimal) dat
   where
-    dat = map (\x -> M.findWithDefault 0 x _genomics_context)
-        [CDS, UTR, Intron, Intergenic, Ribosomal, Mitochondrial]
+    dat = map (\x -> M.lookupDefault 0 x _count_table)
+        [Exon, Intron, Intergenic, Ribosomal, Mitochondrial]
 
 readQC :: FilePath -> IO [QC]
 readQC fl = do
     (_:xs) <- map (B.split '\t') . B.lines <$> B.readFile fl
     return $ map toQC xs
   where
-    toQC x = QC (x!!0) (readInt $ x!!1) (readInt $ x!!2)
-        (readDouble $ x!!3) (readDouble $ x!!4) (readDouble $ x!!5) $ M.fromList $
-        zip [CDS, UTR, Intron, Intergenic, Ribosomal, Mitochondrial] $
-        map readDouble $ drop 6 x
+    toQC (f1:f2:f3:f4:f5:f6:rest) = QC f1 (readInt f2) (readInt f3)
+        (readDouble f4) (readDouble f5) (readDouble f6) $ M.fromList $
+        zip [Exon, Intron, Intergenic, Ribosomal, Mitochondrial] $
+        map readInt rest
+    toQC _ = error "formatting error"
     

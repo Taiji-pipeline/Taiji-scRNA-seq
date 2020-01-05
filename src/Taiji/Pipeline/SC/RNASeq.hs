@@ -29,9 +29,10 @@ builder = do
         memory .= 50
     nodePar "Filter_Bam" 'filterNameSortBam $ return ()
     nodePar "Quantification" 'quantification $ memory .= 8
+    nodePar "Filter_Cell" 'filterCells $ return ()
     nodePar "Remove_Doublet" 'removeDoublet $ return ()
     path ["Get_Demulti_Fastq", "Make_Index", "Align", "Filter_Bam"
-        , "Quantification", "Remove_Doublet"]
+        , "Quantification", "Filter_Cell", "Remove_Doublet"]
 
     node "Merge_Matrix" [| \mats -> if length mats < 1
         then return Nothing
