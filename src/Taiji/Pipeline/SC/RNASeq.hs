@@ -15,12 +15,11 @@ builder :: Builder ()
 builder = do
     node "Read_Input" 'readInput $ return ()
 
-    node "Get_Fastq" [| return . getFastq |] $ return ()
+    uNode "Get_Fastq" 'getFastq
     nodePar "Demultiplex" 'extractBarcode $ return ()
     path ["Read_Input", "Get_Fastq", "Demultiplex"]
 
-    node "Get_Demulti_Fastq" [| \(input, fq) -> return $
-        getDemultiplexedFastq input ++ fq |] $ return ()
+    uNode "Get_Demulti_Fastq" [| \(input, fq) -> getDemultiplexedFastq input ++ fq |]
     ["Read_Input", "Demultiplex"] ~> "Get_Demulti_Fastq"
 
     node "Make_Index" 'mkIndex $ return ()

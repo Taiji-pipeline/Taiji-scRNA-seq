@@ -1,11 +1,11 @@
 name:                Taiji-scRNA-seq
-version:             0.1.0
+version:             0.1.1
 homepage:            https://github.com/githubuser/Taiji-RNA-seq#readme
 license:             MIT
 license-file:        LICENSE
 author:              Kai Zhang
 maintainer:          kai@kzhang.org
-copyright:           (c) 2017-2019 Kai Zhang
+copyright:           (c) 2017-2020 Kai Zhang
 category:            Bio
 build-type:          Simple
 extra-source-files:  README.md
