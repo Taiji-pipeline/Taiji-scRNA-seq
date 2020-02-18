@@ -29,7 +29,7 @@ readInput :: SCRNASeqConfig config
           => () -> ReaderT config IO [RAWInput]
 readInput _ = do
     input <- asks _scrnaseq_input 
-    liftIO $ simpleInputReader input "scRNA-seq" RNASeq
+    liftIO $ mkInputReader input "scRNA-seq" RNASeq
 
 getFastq :: [RAWInput]
          -> [RNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)]
