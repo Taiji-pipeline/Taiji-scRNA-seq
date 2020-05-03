@@ -12,6 +12,7 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Quantification
 import           Bio.Data.Bam
 import           Bio.Data.Bed
 import           Bio.Utils.Misc (readInt)
+import Data.Conduit.Zlib (gzip)
 import           Bio.Data.Bed.Types
 import Data.Char (toLower)
 import Language.Javascript.JMacro
@@ -51,7 +52,7 @@ mkExonTree genes = bedToTree (++) $ concat $ zipWith f [0..] genes
 quantification :: SCRNASeqConfig config
                => RNASeq S (File '[NameSorted] 'Bam)
                -> ReaderT config IO ( RNASeq S
-                  ( ( File '[] 'Tsv       
+                  ( ( File '[ColumnName, Gzip] 'Tsv       
                     , File '[Gzip] 'Other )-- ^ quantification
                   , File '[] 'Tsv  ) )   -- ^ QC
 quantification input = do
@@ -59,7 +60,7 @@ quantification input = do
     dir2 <- tempDir
     let output = printf "%s/%s_rep%d.mat.gz" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
-        idx = printf "%s/%s_rep%d_col_names.tsv" dir (T.unpack $ input^.eid)
+        idx = printf "%s/%s_rep%d_col_names.tsv.gz" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
         qc = printf "%s/%s_rep%d_qc.tsv" dir2 (T.unpack $ input^.eid)
             (input^.replicates._1)
@@ -71,7 +72,8 @@ quantification input = do
         genes <- readGenes anno_f
         anno <- readAnnotations anno_f
 
-        B.writeFile idx $ B.unlines $ map (original . geneName) genes
+        runResourceT $ runConduit $ yieldMany genes .|
+            mapC (original . geneName) .| unlinesAsciiC .| gzip .| sinkFile idx
 
         let exons = mkExonTree genes
             outputMat = mapC fst .|
@@ -88,11 +90,11 @@ quantification input = do
 
 filterCells :: SCRNASeqConfig config
             => RNASeq S
-                  ( ( File '[] 'Tsv       
+                  ( ( File '[ColumnName, Gzip] 'Tsv       
                     , File '[Gzip] 'Other )-- ^ quantification
                   , File '[] 'Tsv  )  -- ^ QC
                -> ReaderT config IO ( RNASeq S
-                  ( ( File '[] 'Tsv       
+                  ( ( File '[ColumnName, Gzip] 'Tsv       
                     , File '[Gzip] 'Other )
                   , File '[] 'Tsv  ) )
 filterCells input = do
@@ -213,10 +215,10 @@ countFeat anno = fmap S.size <$> foldlC go M.empty
 
 
 removeDoublet :: SCRNASeqConfig config
-              => RNASeq S ( ( File '[] 'Tsv, File '[Gzip] 'Other)
+              => RNASeq S ( ( File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
                             , File '[] 'Tsv  )
               -> ReaderT config IO ( RNASeq S
-                 ( ( File '[] 'Tsv       
+                 ( ( File '[ColumnName, Gzip] 'Tsv       
                    , File '[Gzip] 'Other ) 
                  , File '[] 'Tsv  ) )
 removeDoublet input = do

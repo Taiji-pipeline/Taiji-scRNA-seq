@@ -51,6 +51,7 @@ library
                      , mtl
                      , jmacro
                      , singletons >= 2.5
+                     , statistics
                      , shelly
                      , SciFlow >= 0.7.0
                      , temporary

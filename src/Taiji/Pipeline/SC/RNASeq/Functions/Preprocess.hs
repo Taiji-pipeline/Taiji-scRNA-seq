@@ -7,6 +7,7 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Preprocess
     ( readInput
     , getFastq
     , getDemultiplexedFastq
+    , getMatrix
     , extractBarcode
     ) where
 
@@ -45,6 +46,30 @@ getDemultiplexedFastq inputs = concatMap split $ concatMap split $
     inputs & mapped.replicates.mapped.files %~ f
   where
     f fls = map fromSomeFile $ filter (\x -> getFileType x == Fastq) $ lefts fls
+
+getMatrix :: [RAWInput]
+          -> [RNASeq S ( File '[RowName, Gzip] 'Tsv
+                       , File '[ColumnName, Gzip] 'Tsv
+                       , File '[Gzip] 'MatrixMarket ) ]
+getMatrix inputs = concatMap split $ concatMap split $
+    inputs & mapped.replicates.mapped.files %~ f . lefts
+  where
+    f fls = case (getRow fls, getCol fls, getMat fls) of
+        (Just row, Just col, Just mat) -> [(row, col, mat)]
+        (Nothing, Nothing, Nothing) -> []
+        _ -> error "Incomplete matrix input"
+    getMat fls = case filter (\x -> x `hasTag` Gzip && getFileType x == MatrixMarket) fls of
+        [] -> Nothing
+        [x] -> Just $ fromSomeFile x
+        _ -> error "Found multiple matrix files in the input"
+    getRow fls = case filter (\x -> x `hasTag` Gzip && x `hasTag` RowName) fls of
+        [] -> Nothing
+        [x] -> Just $ fromSomeFile x
+        _ -> error "Found multiple row name files in the input"
+    getCol fls = case filter (\x -> x `hasTag` Gzip && x `hasTag` ColumnName) fls of
+        [] -> Nothing
+        [x] -> Just $ fromSomeFile x
+        _ -> error "Found multiple column name files in the input"
 
 -- | Extract barcode: @barcode+umi:seq_name
 extractBarcode :: SCRNASeqConfig config

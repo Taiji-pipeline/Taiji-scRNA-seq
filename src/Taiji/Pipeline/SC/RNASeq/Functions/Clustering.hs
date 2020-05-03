@@ -1,18 +1,23 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
     ( filterMatrix
+    , selectFeature
+    , selectFeature'
+    , combineMatrices
     , spectral
     , mkKNNGraph
     , clustering
-    , subMatrix
+    , segregateCells
     , mkExprTable
     ) where 
 
 import Data.Singletons.Prelude (Elem)
+import Data.Conduit.Zlib (multiple, ungzip, gzip)
 import qualified Data.ByteString.Char8 as B
 import Data.List.Ordered (nubSort)
 import           Data.CaseInsensitive                 (original)
@@ -24,11 +29,13 @@ import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector as V
 import qualified Data.HashSet as S
 import Data.Binary (decodeFile)
-import Control.Arrow (first)
+import Control.Arrow (first, second)
 import qualified Data.HashMap.Strict as M
+import Statistics.Sample (meanVarianceUnb)
 import qualified Data.Text as T
 import Data.Binary (encodeFile)
 import Shelly (shelly, run_)
+import Data.Char (toUpper)
 
 import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..))
 import qualified Taiji.Utils.DataFrame as DF
@@ -37,20 +44,81 @@ import Taiji.Utils
 import Taiji.Utils.Plot
 import Taiji.Utils.Plot.ECharts
 
-filterMatrix :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
-             => FilePath
-             -> RNASeq S (File tags 'Other)
-             -> ReaderT config IO (RNASeq S (File '[] 'Tsv, File tags 'Other))
-filterMatrix prefix input = do
+combineMatrices :: SCRNASeqConfig config
+                => [RNASeq S (Either
+                        ( File '[RowName, Gzip] 'Tsv
+                        , File '[ColumnName, Gzip] 'Tsv
+                        , File '[Gzip] 'MatrixMarket ) 
+                        ( File '[ColumnName, Gzip] 'Tsv
+                        , File '[Gzip] 'Other ) 
+                   )]
+                -> ReaderT config IO
+                    (Maybe (RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other )))
+combineMatrices [] = return Nothing
+combineMatrices inputs = do
+    dir <- asks _scrnaseq_output_dir >>= getPath . (<> (asDir "/Cluster/"))
+    let output = dir <> "Merged.mat.gz"
+        idxFl = dir <> "Merged.colnames.txt.gz"
+    liftIO $ do
+        (idx, mat) <- mergeMatrices <$> getMatrices inputs
+        runResourceT $ runConduit $ yieldMany idx .| unlinesAsciiC .|
+            gzip .| sinkFile idxFl
+        saveMatrix output (fromJust . packDecimal) mat
+        return $ Just $ (head inputs & eid .~ "Merged") &
+            replicates._2.files .~
+                ( location .~ idxFl $ emptyFile 
+                , location .~ output $ emptyFile )
+  where
+    getMatrices fls = forM fls $ \x -> do
+        let e = B.pack $ T.unpack $ x^.eid
+        case x^.replicates._2.files of
+            Left (idxFl, rownameFl, matFl) -> do
+                rownames <- readIndex rownameFl
+                idx <- V.map (B.map toUpper) <$> readIndex idxFl
+                mat <- transformation (addPrefix e) <$>
+                    mkSpMatrixMM (matFl^.location) rownames
+                return (idx, mat)
+            Right (idxFl, matFl) -> do
+                idx <- V.map (B.map toUpper) <$> readIndex idxFl
+                mat <- transformation (addPrefix e) <$>
+                    mkSpMatrix readInt (matFl^.location)
+                return (idx, mat)
+    addPrefix x = mapC $ first (\n -> x <> "+" <> n) 
+    readIndex x = runResourceT $ runConduit $ sourceFile (x^.location) .|
+        multiple ungzip .| linesUnboundedAsciiC .|
+        mapC (head . B.words) .| sinkVector
+
+selectFeature :: SCRNASeqConfig config
+              => FilePath
+              -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
+              -> ReaderT config IO [Int]
+selectFeature prefix input = do
     dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
-    let output = printf "%s/%s_rep%d_filt.mat.gz" dir
-            (T.unpack $ input^.eid) (input^.replicates._1)
-        rownames = printf "%s/%s_rep%d_rownames.txt" dir
-            (T.unpack $ input^.eid) (input^.replicates._1)
-    input & replicates.traversed.files %%~ ( \fl -> liftIO $ do
-        sp <- mkSpMatrix readInt $ fl^.location
-        runResourceT $ runConduit $
-            streamRows sp .| mapC f .| unlinesAsciiC .| sinkFile rownames
+    let output = dir <> "/feature_selection.html"
+        fl = input^.replicates.traversed.files._2.location
+    liftIO $ do
+        sp <- mkSpMatrix readInt fl
+        mv <- meanVariance $ transformation (mapC $ second $ map (second fromIntegral)) sp
+        let bins = getBins 20 $ U.toList $ U.map fst mv
+            logVMR = U.map (\(m,v) -> if m == 0 then 0 else log' $ v / m) mv
+            (hi, lo) = partition ((>0.5) . snd) $ scaleDispersion bins logVMR
+            hi' = map (\(i, _) -> (log $ fst $ mv U.! i, logVMR U.! i)) hi
+            lo' = map (\(i, _) -> (log $ fst $ mv U.! i, logVMR U.! i)) lo
+            p = scatter' [("High", hi'), ("Low", lo')]
+        savePlots output [] [p]
+        return $ map fst lo
+  where
+    log' x = if x == 0 then -5 else log x
+
+selectFeature' :: SCRNASeqConfig config
+               => FilePath
+               -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
+               -> ReaderT config IO [Int]
+selectFeature' prefix input = do
+    dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
+    let fl = input^.replicates.traversed.files._2.location
+    liftIO $ do
+        sp <- mkSpMatrix readInt fl
         counts <- do
             v <- UM.replicate (_num_col sp) 0
             runResourceT $ runConduit $ streamRows sp .| concatMapC snd .|
@@ -59,10 +127,43 @@ filterMatrix prefix input = do
         let (zeros, nonzeros) = U.partition ((==0) . snd) $
                 U.zip (U.enumFromN 0 (U.length counts)) counts
             (i, v) = U.unzip nonzeros
-            idx = U.toList $ fst $ U.unzip $ U.filter ((>1.65) . snd) $ U.zip i $ scale v
-        filterCols output (idx ++ U.toList (fst $ U.unzip zeros)) $ fl^.location
+            idx = U.toList $ fst $ U.unzip $ U.filter ((>2) . snd) $ U.zip i $ scale v
+        return $ idx ++ U.toList (fst $ U.unzip zeros)
+
+scaleDispersion :: [[Int]] -> U.Vector Double -> [(Int, Double)]
+scaleDispersion grp xs = concatMap f grp
+  where
+    f idx = zip idx $ U.toList $ scale $ U.fromList $ map (xs U.!) idx
+
+getBins :: Int -> [Double] -> [[Int]]
+getBins nBin xs = filter (not . null) $ go [] (lo + step) $
+    sortBy (comparing fst) $ zip xs [0..]
+  where
+    go acc x' ((x, i):xs) | x <= x' = go (i:acc) x' xs
+                          | otherwise = acc : go [] (x'+step) ((x,i):xs)
+    go acc _ _ = [acc]
+    (lo, hi) = (minimum xs, maximum xs)
+    step = (hi - lo) / fromIntegral nBin
+
+
+filterMatrix :: SCRNASeqConfig config
+             => FilePath
+             -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
+             -> ReaderT config IO (RNASeq S (File '[] 'Tsv, File '[Gzip] 'Other))
+filterMatrix prefix input = do
+    dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
+    --let output = printf "%s/%s_rep%d_filt.mat.gz" dir
+    --        (T.unpack $ input^.eid) (input^.replicates._1)
+    let rownames = printf "%s/%s_rep%d_rownames.txt" dir
+            (T.unpack $ input^.eid) (input^.replicates._1)
+    input & replicates.traversed.files %%~ ( \(_, fl) -> liftIO $ do
+        sp <- mkSpMatrix readInt $ fl^.location
+        runResourceT $ runConduit $
+            streamRows sp .| mapC f .| unlinesAsciiC .| sinkFile rownames
+        --filterCols output removed $ fl^.location
         return ( location .~ rownames $ emptyFile
-               , location .~ output $ emptyFile ) )
+               , fl )
+        )
   where
     f (nm, xs) = nm <> "\t" <> fromJust (packDecimal $ foldl1' (+) $ map snd xs)
 
@@ -171,6 +272,7 @@ plotClusters output input = do
             let compos = composition input
             savePlots output [] $ [p1, p2, plt,
                 clusterComposition compos, tissueComposition compos]
+        _ -> undefined
 
 -- | Compute the normalized tissue composition for each cluster.
 tissueComposition :: DF.DataFrame Int -> EChart
@@ -206,34 +308,25 @@ composition clusters = DF.mkDataFrame rownames colnames $
         in if B.null prefix then "" else T.pack $ B.unpack $ B.init prefix
 
 -- | Extract cluster submatrix
-subMatrix :: SCRNASeqConfig config
-          => FilePath   -- ^ Dir
-          -> [RNASeq S (File tags 'Other)]   -- ^ Matrices
-          -> File tag' 'Other   -- Clusters
-          -> ReaderT config IO [RNASeq S (File tags 'Other)]
-subMatrix prefix mats clFl = do
+segregateCells :: SCRNASeqConfig config
+               => FilePath   -- ^ Dir
+               -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
+               -> File tag' 'Other   -- Clusters
+               -> ReaderT config IO [RNASeq S (File '[Gzip] 'Other)]
+segregateCells prefix matFl clFl = do
     dir <- asks _scrnaseq_output_dir >>= getPath . (<> (asDir prefix))
     liftIO $ do
         cls <- decodeFile $ clFl^.location
-        mat <- mkSpMatrix id $ head mats ^. replicates._2.files.location
+        mat <- mkSpMatrix id $ matFl ^. replicates._2.files._2.location
         let mkSink CellCluster{..} = filterC ((`S.member` ids) . fst) .|
                 (sinkRows (S.size ids) (_num_col mat) id output >> return res)
               where
                 ids = S.fromList $ map _cell_barcode _cluster_member
                 output = dir <> B.unpack _cluster_name <> ".mat.gz"
-                res = head mats & eid .~ T.pack (B.unpack _cluster_name)
-                                & replicates._2.files.location .~ output
-        runResourceT $ runConduit $ streamMatrices id mats .|
-            sequenceSinks (map mkSink cls)
-
--- | Stream rows and add sample id to barcodes.
-streamMatrices :: (B.ByteString -> a)   -- ^ Element decoder
-               -> [RNASeq S (File tags 'Other)]
-               -> ConduitT () (Row a) (ResourceT IO) ()
-streamMatrices decoder inputs = forM_ inputs $ \input -> do
-    mat <- liftIO $ mkSpMatrix decoder $ input^.replicates._2.files.location
-    let f x = B.pack (T.unpack $ input^.eid) <> "+" <> x
-    streamRows mat .| mapC (first f)
+                res = matFl & eid .~ T.pack (B.unpack _cluster_name)
+                            & replicates._2.files .~ (location .~ output $ emptyFile)
+        runResourceT $ runConduit $
+            streamRows mat .| sequenceSinks (map mkSink cls)
 
 -- | Combine expression data into a table and output
 mkExprTable :: SCRNASeqConfig config

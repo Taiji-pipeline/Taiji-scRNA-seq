@@ -4,11 +4,8 @@
 module Taiji.Pipeline.SC.RNASeq ( builder) where
 
 import           Control.Workflow
-import qualified Data.Text as T
-import qualified Data.ByteString.Char8 as B
 
 import Taiji.Prelude
-import Taiji.Utils
 import           Taiji.Pipeline.SC.RNASeq.Functions
 
 builder :: Builder ()
@@ -33,18 +30,26 @@ builder = do
     path ["Get_Demulti_Fastq", "Make_Index", "Align", "Filter_Bam"
         , "Quantification", "Filter_Cell", "Remove_Doublet"]
 
-    node "Merge_Matrix" [| \mats -> if length mats < 1
-        then return Nothing
-        else do
-            dir <- asks _scrnaseq_output_dir >>=
-                getPath . (<> (asDir "/Cluster/"))
-            let output = dir <> "Merged.mat.gz"
-            liftIO $ concatMatrix output $ flip map mats $ \mat ->
-                ( Just $ B.pack $ T.unpack $ mat^.eid
-                , mat^.replicates._2.files._1._2.location )
-            return $ Just $ (head mats & eid .~ "Merged") &
-                replicates._2.files %~ (\((_,fl),_) -> location .~ output $ fl)
-            |] $ return ()
+    node "QC" 'plotQC $ return ()
+    ["Quantification"] ~> "QC"
+
+    node "Merge_Matrix" [| \(inputs, mats) -> do
+        let a = getMatrix inputs & mapped.replicates._2.files %~ Left
+            b = mats & mapped.replicates._2.files %~ Right . fst
+        combineMatrices $ a ++ b
+        |] $ return ()
+    ["Read_Input", "Remove_Doublet"] ~> "Merge_Matrix"
+
+    {-
+    node "Feature_Selection" [| \case
+        Nothing -> return Nothing
+        Just input -> do
+            let prefix = "/Cluster/"
+            idx <- selectFeature' prefix input
+            return $ Just (idx, input)
+            --return $ Just ([], input)
+        |] $ return ()
+    -}
     node "Merged_Reduce_Dimension" [| \case
         Nothing -> return Nothing
         Just input -> do
@@ -60,18 +65,13 @@ builder = do
         Nothing -> return Nothing
         Just input -> Just <$> clustering "/Cluster/" input
         |] $ return ()
-    path ["Remove_Doublet", "Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN", "Merged_Cluster"]
+    path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN", "Merged_Cluster"]
 
-    node "Extract_Sub_Matrix" [| \(mats, cl) -> case cl of
-        Nothing -> return []
-        Just clFl -> do
-            let mats' = flip map mats $ \x ->
-                    x & replicates.traverse.files %~ snd . fst
-            subMatrix "/temp/" mats' $ clFl^.replicates._2.files
+    node "Make_Cluster_Matrix" [| \case
+        (Just mat, Just cl) -> segregateCells "/Quantification/Cluster/" mat $
+            cl^.replicates._2.files
+        _ -> return []
         |] $ return ()
     node "Make_Expr_Table" [| mkExprTable "/Quantification/" |] $ return ()
-    ["Remove_Doublet", "Merged_Cluster"] ~> "Extract_Sub_Matrix"
-    path ["Extract_Sub_Matrix", "Make_Expr_Table"]
-
-    node "QC" 'plotQC $ return ()
-    ["Quantification"] ~> "QC"
+    ["Merge_Matrix", "Merged_Cluster"] ~> "Make_Cluster_Matrix"
+    path ["Make_Cluster_Matrix", "Make_Expr_Table"]
