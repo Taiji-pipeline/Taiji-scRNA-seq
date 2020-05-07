@@ -68,9 +68,9 @@ builder = do
     path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN", "Merged_Cluster"]
 
     node "Make_Cluster_Matrix" [| \case
-        (Just mat, Just cl) -> segregateCells "/Quantification/Cluster/" mat $
-            cl^.replicates._2.files
-        _ -> return []
+        (Just mat, Just cl) -> fmap Just $
+            segregateCells "/Quantification/Cluster/" mat $ cl^.replicates._2.files
+        _ -> return Nothing
         |] $ return ()
     node "Make_Expr_Table" [| mkExprTable "/Quantification/" |] $ return ()
     ["Merge_Matrix", "Merged_Cluster"] ~> "Make_Cluster_Matrix"
