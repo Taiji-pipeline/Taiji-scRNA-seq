@@ -34,7 +34,7 @@ class SCRNASeqConfig config where
     _scrnaseq_genome_fasta :: config -> Maybe FilePath
     _scrnaseq_annotation :: config -> FilePath
     _scrnaseq_doublet_score_cutoff :: config -> Double
-    _scrnaseq_cluster_resolution :: config -> Double
+    _scrnaseq_cluster_resolutions :: config -> [Double]
     _scrnaseq_cluster_optimizer :: config -> Optimizer
 
 qcDir :: SCRNASeqConfig config => ReaderT config IO FilePath

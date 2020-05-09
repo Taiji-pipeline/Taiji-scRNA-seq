@@ -12,11 +12,12 @@ builder :: Builder ()
 builder = do
     node "Read_Input" 'readInput $ return ()
 
-    uNode "Get_Fastq" 'getFastq
+    uNode "Get_Fastq" [| return . getFastq |]
     nodePar "Demultiplex" 'extractBarcode $ return ()
     path ["Read_Input", "Get_Fastq", "Demultiplex"]
 
-    uNode "Get_Demulti_Fastq" [| \(input, fq) -> getDemultiplexedFastq input ++ fq |]
+    uNode "Get_Demulti_Fastq" [| \(input, fq) -> return $
+        getDemultiplexedFastq input ++ fq |]
     ["Read_Input", "Demultiplex"] ~> "Get_Demulti_Fastq"
 
     node "Make_Index" 'mkIndex $ return ()
@@ -61,11 +62,27 @@ builder = do
         Just input -> fmap Just $ mkKNNGraph "/Cluster/" $
             input & replicates.traverse.files %~ return
         |] $ return ()
+    uNode "Merged_Compute_Stability_Prep" [| \case
+        Nothing -> return []
+        Just input -> do
+            res <- asks _scrnaseq_cluster_resolutions
+            return $ zip res $ repeat input
+        |]
+    nodePar "Merged_Compute_Stability" 'computeStability $ return ()
+    path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN",
+        "Merged_Compute_Stability_Prep", "Merged_Compute_Stability"]
+
+    node "Merged_Pick_Resolution" [| \(knn, res) -> case knn of
+        Nothing -> return Nothing
+        Just knn' -> return $ Just (pickResolution res, knn')
+        |] $ return ()
+    ["Merged_Make_KNN", "Merged_Compute_Stability"] ~> "Merged_Pick_Resolution"
+
     node "Merged_Cluster" [| \case
         Nothing -> return Nothing
         Just input -> Just <$> clustering "/Cluster/" input
         |] $ return ()
-    path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN", "Merged_Cluster"]
+    path ["Merged_Pick_Resolution", "Merged_Cluster"]
 
     node "Make_Cluster_Matrix" [| \case
         (Just mat, Just cl) -> fmap Just $

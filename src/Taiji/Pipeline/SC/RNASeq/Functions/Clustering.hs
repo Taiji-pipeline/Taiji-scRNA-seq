@@ -12,6 +12,8 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
     , spectral
     , mkKNNGraph
     , clustering
+    , computeStability
+    , pickResolution
     , segregateCells
     , mkExprTable
     ) where 
@@ -32,7 +34,6 @@ import qualified Data.HashSet as S
 import Data.Binary (decodeFile)
 import Control.Arrow (first, second)
 import qualified Data.HashMap.Strict as M
-import Statistics.Sample (meanVarianceUnb)
 import qualified Data.Text as T
 import Data.Binary (encodeFile)
 import Shelly (shelly, run_)
@@ -218,12 +219,11 @@ mkKNNGraph prefix input = do
 
 clustering :: SCRNASeqConfig config
            => FilePath
-           -> RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)
+           -> (Double, RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
            -> ReaderT config IO (RNASeq S (File '[] 'Other))
-clustering prefix input = do
+clustering prefix (res, input) = do
     tmp <- asks _scrnaseq_tmp_dir
     dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
-    res <- asks _scrnaseq_cluster_resolution 
     optimizer <- asks _scrnaseq_cluster_optimizer 
     let output = printf "%s/%s_rep%d_clusters.bin" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
@@ -266,26 +266,33 @@ clustering' dir method res (idx, knn, umap) = withTemp dir $ \tmpFl -> do
     f _ = error "formatting error"
 {-# INLINE clustering' #-}
 
-{-
+pickResolution :: [(Double, Double, Double)]
+               -> Double
+pickResolution xs = case filter (\x -> x^._3 > 0.8) (take 5 xs') of
+    [] -> head xs' ^. _1
+    x -> maximumBy (comparing (^._2)) x ^. _1
+  where
+    xs' = sortBy (flip (comparing (^._3))) xs
+
 computeStability :: SCRNASeqConfig config
-                 => FilePath
-                 -> (Double, RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
-                 -> 
-computeStability = do
+                 => (Double, RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
+                 -> ReaderT config IO (Double, Double, Double)
+computeStability (res, input) = do
     tmp <- asks _scrnaseq_tmp_dir
-    dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
-    res <- asks _scrnaseq_cluster_resolution 
     optimizer <- asks _scrnaseq_cluster_optimizer 
-    let output = printf "%s/%s_rep%d_clusters.bin" dir (T.unpack $ input^.eid)
-            (input^.replicates._1)
-        plotFl = printf "%s/%s_rep%d_clusters.html" dir (T.unpack $ input^.eid)
-            (input^.replicates._1)
-    input & replicates.traversed.files %%~ liftIO . ( \fl -> do
-        cls <- clustering' tmp optimizer res fl
-        encodeFile output cls
-        plotClusters plotFl cls
-        return $ location .~ output $ emptyFile )
--}
+    let knn = input^.replicates.traversed.files._2.location
+    liftIO $ withTemp tmp $ \tmpFl -> do
+        shelly $ run_ "taiji-utils"
+            [ "clust", T.pack knn, T.pack tmpFl
+            , "--stability"
+            , "--res", T.pack $ show res
+            , "--optimizer"
+            , case optimizer of
+                RBConfiguration -> "RB"
+                CPM -> "CPM"
+            ]
+        [num, st] <- words . head . lines <$> readFile tmpFl
+        return (res, read num, read st)
 
 plotClusters :: FilePath
              -> [CellCluster]
