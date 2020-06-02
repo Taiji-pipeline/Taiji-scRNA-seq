@@ -24,7 +24,6 @@ import qualified Data.ByteString.Char8 as B
 import Data.List.Ordered (nubSort)
 import Data.Conduit.Internal (zipSinks)
 import           Data.CaseInsensitive                 (original)
-import           Bio.RealWorld.GENCODE (readGenes, Gene(..))
 import Data.ByteString.Lex.Integral (packDecimal)
 import Bio.Utils.Functions (scale)
 import qualified Data.Vector.Unboxed.Mutable as UM

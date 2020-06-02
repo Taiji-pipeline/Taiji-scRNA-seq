@@ -69,7 +69,7 @@ quantification input = do
     input & replicates.traverse.files %%~ liftIO . ( \bam -> do
         hdr <- getBamHeader $ bam^.location
 
-        genes <- readGenes anno_f
+        genes <- readGenesValidated anno_f
         anno <- readAnnotations anno_f
 
         runResourceT $ runConduit $ yieldMany genes .|
