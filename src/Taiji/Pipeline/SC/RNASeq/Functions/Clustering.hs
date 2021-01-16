@@ -62,14 +62,19 @@ combineMatrices inputs = do
         idxFl = dir <> "Merged.colnames.txt.gz"
     liftIO $ do
         (idx, mat) <- mergeMatrices <$> getMatrices inputs
-        runResourceT $ runConduit $ yieldMany idx .| unlinesAsciiC .|
+        zeros <- U.toList . U.imapMaybe (\i x -> if x < minCells then Just i else Nothing) <$>
+            colSum (fmap (const (1 :: Int)) mat)
+        let mat' = deleteCols zeros mat
+            idx' = V.ifilter (\i _ -> not $ i `elem` zeros) idx
+        runResourceT $ runConduit $ yieldMany idx' .| unlinesAsciiC .|
             gzip .| sinkFile idxFl
-        saveMatrix output (fromJust . packDecimal) mat
+        saveMatrix output (fromJust . packDecimal) mat'
         return $ Just $ (head inputs & eid .~ "Merged") &
             replicates._2.files .~
                 ( location .~ idxFl $ emptyFile 
                 , location .~ output $ emptyFile )
   where
+    minCells = 5
     getMatrices fls = forM fls $ \x -> do
         let e = B.pack $ T.unpack $ x^.eid
         case x^.replicates._2.files of
@@ -153,19 +158,21 @@ filterMatrix :: SCRNASeqConfig config
              -> ReaderT config IO (RNASeq S (File '[] 'Tsv, File '[Gzip] 'Other))
 filterMatrix prefix input = do
     dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
-    let output = printf "%s/%s_rep%d_norm_filt.mat.gz" dir
-            (T.unpack $ input^.eid) (input^.replicates._1)
+    --let output = printf "%s/%s_rep%d_norm_filt.mat.gz" dir
+    --        (T.unpack $ input^.eid) (input^.replicates._1)
     let rownames = printf "%s/%s_rep%d_rownames.txt" dir
             (T.unpack $ input^.eid) (input^.replicates._1)
     input & replicates.traversed.files %%~ ( \(_, fl) -> liftIO $ do
         sp <- mkSpMatrix readInt $ fl^.location
         let (r, c) = (_num_row sp, _num_col sp)
+        {-
         _ <- runResourceT $ runConduit $ streamRows sp .| mapC f .|
             zipSinks (mapC fst .| unlinesAsciiC .| sinkFile rownames)
                 (mapC snd .| sinkRows r c toShortest output)
         --filterCols output removed $ fl^.location
+        -}
         return ( location .~ rownames $ emptyFile
-               , location .~ output $ emptyFile )
+               , location .~ (fl^.location) $ emptyFile )
         )
   where
     f (nm, xs) = ( nm <> "\t" <> fromJust (packDecimal totalReads)
@@ -179,24 +186,35 @@ filterMatrix prefix input = do
 spectral :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
          => FilePath  -- ^ directory
          -> Maybe Int  -- ^ seed
-         -> RNASeq S (a, File tags 'Other)
-         -> ReaderT config IO (RNASeq S (a, File '[Gzip] 'Tsv))
+         -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)
+         -> ReaderT config IO (RNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv))
 spectral prefix seed input = do
     dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_spectral.tsv.gz" dir
             (T.unpack $ input^.eid) (input^.replicates._1)
-    input & replicates.traversed.files %%~ liftIO . ( \(rownames, fl) -> do
+        rownames = printf "%s/%s_rep%d_rownames.txt" dir
+            (T.unpack $ input^.eid) (input^.replicates._1)
+    input & replicates.traversed.files %%~ liftIO . ( \(_, fl) -> withTemp Nothing $ \tmp -> do
+        sp <- mkSpMatrix readInt $ fl^.location
+        _ <- runResourceT $ runConduit $ streamRows sp .| mapC f .| unlinesAsciiC .| sinkFile rownames
+
+        shelly $ run_ "taiji-utils" $ ["normalize", T.pack $ fl^.location, T.pack tmp]
         shelly $ run_ "taiji-utils" $ [ "reduce"
-            , "--distance", "cosine"
-            , T.pack $ fl^.location, T.pack output ] ++ maybe []
+            , "--distance", "rbf"
+            , "--input-format", "dense"
+            , T.pack tmp, T.pack output ] ++ maybe []
             (\x -> ["--seed", T.pack $ show x]) seed
-        return (rownames, location .~ output $ emptyFile)
+        return ( location .~ rownames $ emptyFile, location .~ output $ emptyFile)
         )
+  where
+    f (nm, xs) = nm <> "\t" <> fromJust (packDecimal totalReads)
+      where
+        totalReads = foldl1' (+) $ map snd xs
 
 mkKNNGraph :: SCRNASeqConfig config
            => FilePath
-           -> RNASeq S [(File '[] 'Tsv, File '[Gzip] 'Tsv)]
-           -> ReaderT config IO (RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
+           -> RNASeq S [(a, File '[Gzip] 'Tsv)]
+           -> ReaderT config IO (RNASeq S (a, File '[] 'Other, File '[] Tsv))
 mkKNNGraph prefix input = do
     dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
     let output_knn = printf "%s/%s_rep%d_knn.npz" dir (T.unpack $ input^.eid)

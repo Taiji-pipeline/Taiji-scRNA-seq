@@ -24,6 +24,7 @@ library
                        Taiji.Pipeline.SC.RNASeq.Functions.Clustering
                        Taiji.Pipeline.SC.RNASeq.Functions.Quantification
                        Taiji.Pipeline.SC.RNASeq.Functions.QC
+                       Taiji.Pipeline.SC.RNASeq.Functions.Normalization
                        Taiji.Pipeline.SC.RNASeq.Functions.Utils
                        Taiji.Pipeline.SC.RNASeq.Types
 
@@ -42,6 +43,7 @@ library
                      , conduit-extra
                      , containers
                      , matrices
+                     , mwc-random
                      , double-conversion
                      , data-ordlist
                      , haskell-igraph >= 0.7.0
@@ -50,6 +52,7 @@ library
                      , IntervalMap
                      , mtl
                      , jmacro
+                     , sampling
                      , singletons >= 2.5
                      , statistics
                      , shelly

@@ -41,21 +41,11 @@ builder = do
         |] $ return ()
     ["Read_Input", "Remove_Doublet"] ~> "Merge_Matrix"
 
-    {-
-    node "Feature_Selection" [| \case
-        Nothing -> return Nothing
-        Just input -> do
-            let prefix = "/Cluster/"
-            idx <- selectFeature' prefix input
-            return $ Just (idx, input)
-            --return $ Just ([], input)
-        |] $ return ()
-    -}
     node "Merged_Reduce_Dimension" [| \case
         Nothing -> return Nothing
         Just input -> do
             let prefix = "/Cluster/"
-            fmap Just $ filterMatrix prefix input >>= spectral prefix Nothing
+            fmap Just $ spectral prefix Nothing input
         |] $ return ()
     node "Merged_Make_KNN" [| \case
         Nothing -> return Nothing
