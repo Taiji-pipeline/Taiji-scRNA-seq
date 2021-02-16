@@ -5,10 +5,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
-    ( filterMatrix
-    , selectFeature
-    , selectFeature'
-    , combineMatrices
+    ( combineMatrices
     , spectral
     , mkKNNGraph
     , clustering
@@ -76,7 +73,7 @@ combineMatrices inputs = do
   where
     minCells = 5
     getMatrices fls = forM fls $ \x -> do
-        let e = B.pack $ T.unpack $ x^.eid
+        let e = B.pack $ printf "%s_%d" (T.unpack $ x^.eid) (x^.replicates._1)
         case x^.replicates._2.files of
             Left (idxFl, rownameFl, matFl) -> do
                 rownames <- readIndex rownameFl
@@ -93,94 +90,6 @@ combineMatrices inputs = do
     readIndex x = runResourceT $ runConduit $ sourceFile (x^.location) .|
         multiple ungzip .| linesUnboundedAsciiC .|
         mapC (head . B.words) .| sinkVector
-
-selectFeature :: SCRNASeqConfig config
-              => FilePath
-              -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
-              -> ReaderT config IO [Int]
-selectFeature prefix input = do
-    dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
-    let output = dir <> "/feature_selection.html"
-        fl = input^.replicates.traversed.files._2.location
-    liftIO $ do
-        sp <- mkSpMatrix readInt fl
-        mv <- meanVariance $ transformation (mapC $ second $ map (second fromIntegral)) sp
-        let bins = getBins 20 $ U.toList $ U.map fst mv
-            logVMR = U.map (\(m,v) -> if m == 0 then 0 else log' $ v / m) mv
-            (hi, lo) = partition ((>0.5) . snd) $ scaleDispersion bins logVMR
-            hi' = map (\(i, _) -> (log $ fst $ mv U.! i, logVMR U.! i)) hi
-            lo' = map (\(i, _) -> (log $ fst $ mv U.! i, logVMR U.! i)) lo
-            p = scatter' [("High", hi'), ("Low", lo')]
-        savePlots output [] [p]
-        return $ map fst lo
-  where
-    log' x = if x == 0 then -5 else log x
-
-selectFeature' :: SCRNASeqConfig config
-               => FilePath
-               -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
-               -> ReaderT config IO [Int]
-selectFeature' prefix input = do
-    dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
-    let fl = input^.replicates.traversed.files._2.location
-    liftIO $ do
-        sp <- mkSpMatrix readInt fl
-        counts <- do
-            v <- UM.replicate (_num_col sp) 0
-            runResourceT $ runConduit $ streamRows sp .| concatMapC snd .|
-                mapC fst .| mapM_C (UM.unsafeModify v (+1))
-            U.unsafeFreeze v
-        let (zeros, nonzeros) = U.partition ((==0) . snd) $
-                U.zip (U.enumFromN 0 (U.length counts)) counts
-            (i, v) = U.unzip nonzeros
-            idx = U.toList $ fst $ U.unzip $ U.filter ((>2) . snd) $ U.zip i $ scale v
-        return $ idx ++ U.toList (fst $ U.unzip zeros)
-
-scaleDispersion :: [[Int]] -> U.Vector Double -> [(Int, Double)]
-scaleDispersion grp xs = concatMap f grp
-  where
-    f idx = zip idx $ U.toList $ scale $ U.fromList $ map (xs U.!) idx
-
-getBins :: Int -> [Double] -> [[Int]]
-getBins nBin xs = filter (not . null) $ go [] (lo + step) $
-    sortBy (comparing fst) $ zip xs [0..]
-  where
-    go acc x' ((x, i):xs) | x <= x' = go (i:acc) x' xs
-                          | otherwise = acc : go [] (x'+step) ((x,i):xs)
-    go acc _ _ = [acc]
-    (lo, hi) = (minimum xs, maximum xs)
-    step = (hi - lo) / fromIntegral nBin
-
-
-filterMatrix :: SCRNASeqConfig config
-             => FilePath
-             -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
-             -> ReaderT config IO (RNASeq S (File '[] 'Tsv, File '[Gzip] 'Other))
-filterMatrix prefix input = do
-    dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
-    --let output = printf "%s/%s_rep%d_norm_filt.mat.gz" dir
-    --        (T.unpack $ input^.eid) (input^.replicates._1)
-    let rownames = printf "%s/%s_rep%d_rownames.txt" dir
-            (T.unpack $ input^.eid) (input^.replicates._1)
-    input & replicates.traversed.files %%~ ( \(_, fl) -> liftIO $ do
-        sp <- mkSpMatrix readInt $ fl^.location
-        let (r, c) = (_num_row sp, _num_col sp)
-        {-
-        _ <- runResourceT $ runConduit $ streamRows sp .| mapC f .|
-            zipSinks (mapC fst .| unlinesAsciiC .| sinkFile rownames)
-                (mapC snd .| sinkRows r c toShortest output)
-        --filterCols output removed $ fl^.location
-        -}
-        return ( location .~ rownames $ emptyFile
-               , location .~ (fl^.location) $ emptyFile )
-        )
-  where
-    f (nm, xs) = ( nm <> "\t" <> fromJust (packDecimal totalReads)
-                 , (nm, map normalize xs) )
-      where
-        totalReads = foldl1' (+) $ map snd xs
-        normalize (i, x) = (i, log1p $ fromIntegral x / (fromIntegral totalReads / 10000))
-        log1p x = log $ 1 + x :: Double
 
 -- | Reduce dimensionality using spectral clustering
 spectral :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
@@ -236,12 +145,13 @@ mkKNNGraph prefix input = do
 
 clustering :: SCRNASeqConfig config
            => FilePath
-           -> (Double, RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
+           -> Double
+           -> Optimizer
+           -> RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)
            -> ReaderT config IO (RNASeq S (File '[] 'Other))
-clustering prefix (res, input) = do
+clustering prefix res optimizer input = do
     tmp <- asks _scrnaseq_tmp_dir
     dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
-    optimizer <- asks _scrnaseq_cluster_optimizer 
     let output = printf "%s/%s_rep%d_clusters.bin" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
         plotFl = printf "%s/%s_rep%d_clusters.html" dir (T.unpack $ input^.eid)
@@ -411,9 +321,6 @@ mkExprTable prefix (Just (geneFl, inputs)) = do
         DF.writeTable output3 (T.pack . show) $ DF.map (lookupP cdf) ss
         return $ Just (output1, output2, output3)
   where
-    combine xs = (head gene, foldl1' (zipWith max) vals)
-      where
-        (gene, vals) = unzip xs
     lookupP (vec, res, n) x | p == 0 = 1 / n
                             | otherwise = p
       where

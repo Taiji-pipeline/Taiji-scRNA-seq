@@ -6,6 +6,7 @@ module Taiji.Pipeline.SC.RNASeq ( builder) where
 import           Control.Workflow
 
 import Taiji.Prelude
+import           Taiji.Utils (optimalParam, evalClusters)
 import           Taiji.Pipeline.SC.RNASeq.Functions
 
 builder :: Builder ()
@@ -52,27 +53,42 @@ builder = do
         Just input -> fmap Just $ mkKNNGraph "/Cluster/" $
             input & replicates.traverse.files %~ return
         |] $ return ()
-    uNode "Merged_Compute_Stability_Prep" [| \case
-        Nothing -> return []
-        Just input -> do
+    path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN"]
+
+--------------------------------------------------------------------------------
+-- Selecting parameter
+--------------------------------------------------------------------------------
+    uNode "Merged_Param_Search_Prep" [| \case
+        (Just spectral, Just knn) -> do
             res <- asks _scrnaseq_cluster_resolutions
-            return $ zip res $ repeat input
+            optimizer <- asks _scrnaseq_cluster_optimizer 
+            return $ flip map res $ \r ->
+                ( optimizer, r
+                , spectral^.replicates._2.files._2.location
+                , knn^.replicates._2.files._2.location )
+        _ -> return []
         |]
-    nodePar "Merged_Compute_Stability" 'computeStability $ return ()
-    path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN",
-        "Merged_Compute_Stability_Prep", "Merged_Compute_Stability"]
-
-    node "Merged_Pick_Resolution" [| \(knn, res) -> case knn of
-        Nothing -> return Nothing
-        Just knn' -> return $ Just (pickResolution res, knn')
+    ["Merged_Reduce_Dimension", "Merged_Make_KNN"] ~> "Merged_Param_Search_Prep"
+    nodePar "Merged_Param_Search" [| \(optimizer, r, spectral, knn) -> do
+        res <- liftIO $ evalClusters optimizer r spectral knn
+        return ((optimizer, r), res)
         |] $ return ()
-    ["Merged_Make_KNN", "Merged_Compute_Stability"] ~> "Merged_Pick_Resolution"
+    path ["Merged_Param_Search_Prep", "Merged_Param_Search"]
 
+    node "Merged_Get_Param" [| \(knn, res) -> case knn of
+        Nothing -> return Nothing
+        Just knn' -> do
+            dir <- asks _scrnaseq_output_dir >>= getPath . (<> "/Figure/")
+            p <- liftIO $ optimalParam (dir <> "Clustering_parameters.html") res
+            return $ Just (p, knn')
+        |] $ return ()
+    ["Merged_Make_KNN", "Merged_Param_Search"] ~> "Merged_Get_Param"
     node "Merged_Cluster" [| \case
         Nothing -> return Nothing
-        Just input -> Just <$> clustering "/Cluster/" input
+        Just ((optimizer, res), input) -> do
+            Just <$> clustering "/Cluster/" res optimizer input
         |] $ return ()
-    path ["Merged_Pick_Resolution", "Merged_Cluster"]
+    path ["Merged_Get_Param", "Merged_Cluster"]
 
     node "Make_Cluster_Matrix" [| \case
         (Just mat, Just cl) -> fmap Just $

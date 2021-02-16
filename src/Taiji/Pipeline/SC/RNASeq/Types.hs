@@ -1,8 +1,12 @@
 {-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE StandaloneDeriving #-}
 module Taiji.Pipeline.SC.RNASeq.Types
-    ( SCRNASeqConfig(..)
+    ( SCRNASeq(..)
+    , SCRNASeqConfig(..)
     , qcDir
     , tempDir
 
@@ -14,6 +18,8 @@ module Taiji.Pipeline.SC.RNASeq.Types
     , qcFileHeader
     ) where
 
+import Bio.Data.Experiment.Types
+import Bio.Data.Experiment.Replicate
 import           Bio.Pipeline.Utils
 import qualified Data.ByteString.Char8                as B
 import Data.Hashable
@@ -23,6 +29,14 @@ import Data.Binary
 import Data.Aeson
 
 import Taiji.Prelude
+
+newtype SCRNASeq container file = SCRNASeq (CommonFields container file)
+     deriving (Generic, Experiment)
+
+deriving instance Show (container (Replicate file)) => Show (SCRNASeq container file)
+
+instance Binary (container (Replicate file)) =>
+    Binary (SCRNASeq container file)
 
 class SCRNASeqConfig config where
     _scrnaseq_input :: config -> FilePath
@@ -53,7 +67,7 @@ data QC = QC
     , _count_table :: M.HashMap Annotation Int }
 
 passQC :: QC -> Bool
-passQC QC{..} = _mitoRate <= 0.1 && _uniq_gene >= 200
+passQC QC{..} = _mitoRate <= 0.2 && _uniq_gene >= 200
 
 -- | A region may have multiple annotations.
 data Annotation = Exon
@@ -73,7 +87,7 @@ instance Binary Annotation
 
 qcFileHeader :: B.ByteString
 qcFileHeader = B.intercalate "\t" $
-  [ "Num_UMI", "Num_Gene", "duplication_rate", "chrM_rate", "doublet_score"
+  [ "Barcode", "Num_UMI", "Num_Gene", "duplication_rate", "chrM_rate", "doublet_score"
   , "Exon", "Intron", "Intergenic", "Ribosomal", "Mitochondrial" ]
 
 showQC :: QC -> B.ByteString
@@ -99,4 +113,3 @@ readQC fl = do
         zip [Exon, Intron, Intergenic, Ribosomal, Mitochondrial] $
         map readInt rest
     toQC _ = error "formatting error"
-    
