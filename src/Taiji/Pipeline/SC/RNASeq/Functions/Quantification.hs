@@ -50,11 +50,11 @@ mkExonTree genes = bedToTree (++) $ concat $ zipWith f [0..] genes
 {-# INLINE mkExonTree #-}
 
 quantification :: SCRNASeqConfig config
-               => RNASeq S (File '[NameSorted] 'Bam)
-               -> ReaderT config IO ( RNASeq S
+               => SCRNASeq S (File '[NameSorted] 'Bam)
+               -> ReaderT config IO ( SCRNASeq S
                   ( ( File '[ColumnName, Gzip] 'Tsv       
-                    , File '[Gzip] 'Other )-- ^ quantification
-                  , File '[] 'Tsv  ) )   -- ^ QC
+                    , File '[Gzip] 'Other ) -- ^ quantification
+                    , File '[] 'Tsv  ) )   -- ^ QC
 quantification input = do
     dir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
     dir2 <- tempDir
@@ -89,14 +89,14 @@ quantification input = do
         )
 
 filterCells :: SCRNASeqConfig config
-            => RNASeq S
+            => SCRNASeq S
                   ( ( File '[ColumnName, Gzip] 'Tsv       
                     , File '[Gzip] 'Other )-- ^ quantification
-                  , File '[] 'Tsv  )  -- ^ QC
-               -> ReaderT config IO ( RNASeq S
+                    , File '[] 'Tsv  )  -- ^ QC
+            -> ReaderT config IO ( SCRNASeq S
                   ( ( File '[ColumnName, Gzip] 'Tsv       
                     , File '[Gzip] 'Other )
-                  , File '[] 'Tsv  ) )
+                    , File '[] 'Tsv  ) )
 filterCells input = do
     dir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_filt.mat.gz" dir (T.unpack $ input^.eid)
@@ -215,9 +215,9 @@ countFeat anno = fmap S.size <$> foldlC go M.empty
 
 
 removeDoublet :: SCRNASeqConfig config
-              => RNASeq S ( ( File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
+              => SCRNASeq S ( ( File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
                             , File '[] 'Tsv  )
-              -> ReaderT config IO ( RNASeq S
+              -> ReaderT config IO ( SCRNASeq S
                  ( ( File '[ColumnName, Gzip] 'Tsv       
                    , File '[Gzip] 'Other ) 
                  , File '[] 'Tsv  ) )
@@ -286,4 +286,3 @@ detectDoublet qcFile qcPlot oldQC matFl = withTemp Nothing $ \tmp -> do
                 }
             }
        } |]
-

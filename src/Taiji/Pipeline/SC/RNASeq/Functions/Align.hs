@@ -30,8 +30,8 @@ mkIndex input
             return input
 
 tagAlign :: SCRNASeqConfig config
-         => RNASeq S (File '[Gzip] 'Fastq)
-         -> ReaderT config IO (RNASeq S (File '[] 'Bam))
+         => SCRNASeq S (File '[Gzip] 'Fastq)
+         -> ReaderT config IO (SCRNASeq S (File '[] 'Bam))
 tagAlign input = do
     dir <- asks ((<> "/Bam") . _scrnaseq_output_dir) >>= getPath
     idx <- asks _scrnaseq_star_index
@@ -45,8 +45,8 @@ tagAlign input = do
 
 -- | Filter bad quality reads and name sort Bam file.
 filterNameSortBam :: SCRNASeqConfig config
-                  => RNASeq S (File '[] 'Bam)
-                  -> ReaderT config IO (RNASeq S (File '[NameSorted] 'Bam))
+                  => SCRNASeq S (File '[] 'Bam)
+                  -> ReaderT config IO (SCRNASeq S (File '[NameSorted] 'Bam))
 filterNameSortBam input = do
     dir <- asks ((<> "/Bam") . _scrnaseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_filt.bam" dir (T.unpack $ input^.eid)

@@ -17,7 +17,7 @@ import           Taiji.Pipeline.SC.RNASeq.Types
 import qualified Taiji.Utils.DataFrame as DF
 
 plotQC :: SCRNASeqConfig config
-       => [RNASeq S (a, File '[] 'Tsv)]
+       => [SCRNASeq S (a, File '[] 'Tsv)]
        -> ReaderT config IO ()
 plotQC [] = return ()
 plotQC inputs = do
@@ -44,4 +44,3 @@ plotQC inputs = do
         feats = [Exon, Intron, Intergenic, Ribosomal, Mitochondrial]
         f m = map (\x -> fromIntegral $ M.lookupDefault 0 x m) feats
         normalize xs = let s = V.foldl1 (+) xs in V.map (/s) xs
-

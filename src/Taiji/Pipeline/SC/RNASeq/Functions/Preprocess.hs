@@ -24,16 +24,16 @@ import           Taiji.Pipeline.SC.RNASeq.Types
 import Taiji.Pipeline.SC.RNASeq.Functions.Preprocess.Internal
 import Taiji.Prelude
 
-type RAWInput = RNASeq N [Either SomeFile (SomeFile, SomeFile)]
+type RAWInput = SCRNASeq N [Either SomeFile (SomeFile, SomeFile)]
 
 readInput :: SCRNASeqConfig config
           => () -> ReaderT config IO [RAWInput]
 readInput _ = do
     input <- asks _scrnaseq_input 
-    liftIO $ mkInputReader input "scRNA-seq" RNASeq
+    liftIO $ mkInputReader input "scRNA-seq" SCRNASeq
 
 getFastq :: [RAWInput]
-         -> [RNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)]
+         -> [SCRNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)]
 getFastq inputs = concatMap split $ concatMap split $
     inputs & mapped.replicates.mapped.files %~ f
   where
@@ -41,16 +41,16 @@ getFastq inputs = concatMap split $ concatMap split $
         filter (\(x,y) -> getFileType x == Fastq && getFileType y == Fastq) $
         rights fls
 
-getDemultiplexedFastq :: [RAWInput] -> [RNASeq S (File '[Gzip] 'Fastq)]
+getDemultiplexedFastq :: [RAWInput] -> [SCRNASeq S (File '[Gzip] 'Fastq)]
 getDemultiplexedFastq inputs = concatMap split $ concatMap split $
     inputs & mapped.replicates.mapped.files %~ f
   where
     f fls = map fromSomeFile $ filter (\x -> getFileType x == Fastq) $ lefts fls
 
 getMatrix :: [RAWInput]
-          -> [RNASeq S ( File '[RowName, Gzip] 'Tsv
-                       , File '[ColumnName, Gzip] 'Tsv
-                       , File '[Gzip] 'MatrixMarket ) ]
+          -> [SCRNASeq S ( File '[RowName, Gzip] 'Tsv
+                         , File '[ColumnName, Gzip] 'Tsv
+                         , File '[Gzip] 'MatrixMarket ) ]
 getMatrix inputs = concatMap split $ concatMap split $
     inputs & mapped.replicates.mapped.files %~ f . lefts
   where
@@ -73,8 +73,8 @@ getMatrix inputs = concatMap split $ concatMap split $
 
 -- | Extract barcode: @barcode+umi:seq_name
 extractBarcode :: SCRNASeqConfig config
-               => RNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)
-               -> ReaderT config IO (RNASeq S (File '[Gzip] 'Fastq))
+               => SCRNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)
+               -> ReaderT config IO (SCRNASeq S (File '[Gzip] 'Fastq))
 extractBarcode input = input & replicates.traverse.files %%~ fun
   where
     fun (flRead1, flRead2) = do

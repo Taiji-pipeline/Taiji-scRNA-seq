@@ -35,7 +35,7 @@ import Data.Binary (encodeFile)
 import Shelly (shelly, run_)
 import Data.Char (toUpper)
 
-import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..))
+import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..), SCRNASeq)
 import qualified Taiji.Utils.DataFrame as DF
 import Taiji.Prelude
 import Taiji.Utils
@@ -43,7 +43,7 @@ import Taiji.Utils.Plot
 import Taiji.Utils.Plot.ECharts
 
 combineMatrices :: SCRNASeqConfig config
-                => [RNASeq S (Either
+                => [SCRNASeq S (Either
                         ( File '[RowName, Gzip] 'Tsv
                         , File '[ColumnName, Gzip] 'Tsv
                         , File '[Gzip] 'MatrixMarket ) 
@@ -51,7 +51,7 @@ combineMatrices :: SCRNASeqConfig config
                         , File '[Gzip] 'Other ) 
                    )]
                 -> ReaderT config IO
-                    (Maybe (RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other )))
+                    (Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other )))
 combineMatrices [] = return Nothing
 combineMatrices inputs = do
     dir <- asks _scrnaseq_output_dir >>= getPath . (<> (asDir "/Cluster/"))
@@ -95,8 +95,8 @@ combineMatrices inputs = do
 spectral :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
          => FilePath  -- ^ directory
          -> Maybe Int  -- ^ seed
-         -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)
-         -> ReaderT config IO (RNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv))
+         -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)
+         -> ReaderT config IO (SCRNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv))
 spectral prefix seed input = do
     dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_spectral.tsv.gz" dir
@@ -122,8 +122,8 @@ spectral prefix seed input = do
 
 mkKNNGraph :: SCRNASeqConfig config
            => FilePath
-           -> RNASeq S [(a, File '[Gzip] 'Tsv)]
-           -> ReaderT config IO (RNASeq S (a, File '[] 'Other, File '[] Tsv))
+           -> SCRNASeq S [(a, File '[Gzip] 'Tsv)]
+           -> ReaderT config IO (SCRNASeq S (a, File '[] 'Other, File '[] Tsv))
 mkKNNGraph prefix input = do
     dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
     let output_knn = printf "%s/%s_rep%d_knn.npz" dir (T.unpack $ input^.eid)
@@ -147,8 +147,8 @@ clustering :: SCRNASeqConfig config
            => FilePath
            -> Double
            -> Optimizer
-           -> RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)
-           -> ReaderT config IO (RNASeq S (File '[] 'Other))
+           -> SCRNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)
+           -> ReaderT config IO (SCRNASeq S (File '[] 'Other))
 clustering prefix res optimizer input = do
     tmp <- asks _scrnaseq_tmp_dir
     dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
@@ -202,7 +202,7 @@ pickResolution xs = case filter (\x -> x^._3 > 0.8) (take 5 xs') of
     xs' = sortBy (flip (comparing (^._3))) xs
 
 computeStability :: SCRNASeqConfig config
-                 => (Double, RNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
+                 => (Double, SCRNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
                  -> ReaderT config IO (Double, Double, Double)
 computeStability (res, input) = do
     tmp <- asks _scrnaseq_tmp_dir
@@ -273,11 +273,11 @@ composition clusters = DF.mkDataFrame rownames colnames $
 -- | Extract cluster submatrix
 segregateCells :: SCRNASeqConfig config
                => FilePath   -- ^ Dir
-               -> RNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
+               -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
                -> File tag' 'Other   -- Clusters
                -> ReaderT config IO 
                   ( File '[ColumnName, Gzip] 'Tsv
-                  , [RNASeq S (File '[Gzip] 'Other)] )
+                  , [SCRNASeq S (File '[Gzip] 'Other)] )
 segregateCells prefix matFl clFl = do
     dir <- asks _scrnaseq_output_dir >>= getPath . (<> (asDir prefix))
     liftIO $ do
@@ -298,7 +298,7 @@ segregateCells prefix matFl clFl = do
 mkExprTable :: SCRNASeqConfig config
             => FilePath
             -> Maybe ( File '[ColumnName, Gzip] 'Tsv
-               , [RNASeq S (File '[Gzip] 'Other)] )
+               , [SCRNASeq S (File '[Gzip] 'Other)] )
             -> ReaderT config IO (Maybe (FilePath, FilePath, FilePath))
 mkExprTable _ Nothing = return Nothing
 mkExprTable prefix (Just (geneFl, inputs)) = do
