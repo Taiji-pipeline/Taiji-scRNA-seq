@@ -60,7 +60,7 @@ builder = do
 --------------------------------------------------------------------------------
     uNode "Merged_Param_Search_Prep" [| \case
         (Just spectral, Just knn) -> do
-            res <- asks _scrnaseq_cluster_resolutions
+            res <- asks _scrnaseq_cluster_resolution_list
             optimizer <- asks _scrnaseq_cluster_optimizer 
             return $ flip map res $ \r ->
                 ( optimizer, r
@@ -71,7 +71,7 @@ builder = do
     ["Merged_Reduce_Dimension", "Merged_Make_KNN"] ~> "Merged_Param_Search_Prep"
     nodePar "Merged_Param_Search" [| \(optimizer, r, spectral, knn) -> do
         res <- liftIO $ evalClusters optimizer r spectral knn
-        return ((optimizer, r), res)
+        return (r, res)
         |] $ return ()
     path ["Merged_Param_Search_Prep", "Merged_Param_Search"]
 
@@ -80,12 +80,15 @@ builder = do
         Just knn' -> do
             dir <- asks _scrnaseq_output_dir >>= getPath . (<> "/Figure/")
             p <- liftIO $ optimalParam (dir <> "Clustering_parameters.html") res
-            return $ Just (p, knn')
+            asks _scrnaseq_cluster_resolution >>= \case
+                Nothing -> return $ Just (p, knn')
+                Just p' -> return $ Just (p', knn')
         |] $ return ()
     ["Merged_Make_KNN", "Merged_Param_Search"] ~> "Merged_Get_Param"
     node "Merged_Cluster" [| \case
         Nothing -> return Nothing
-        Just ((optimizer, res), input) -> do
+        Just (res, input) -> do
+            optimizer <- asks _scrnaseq_cluster_optimizer 
             Just <$> clustering "/Cluster/" res optimizer input
         |] $ return ()
     path ["Merged_Get_Param", "Merged_Cluster"]
