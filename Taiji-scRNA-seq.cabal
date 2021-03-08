@@ -20,6 +20,7 @@ library
   exposed-modules:     Taiji.Pipeline.SC.RNASeq
                        Taiji.Pipeline.SC.RNASeq.Functions
                        Taiji.Pipeline.SC.RNASeq.Functions.Preprocess
+                       Taiji.Pipeline.SC.RNASeq.Functions.Spectral
                        Taiji.Pipeline.SC.RNASeq.Functions.Align
                        Taiji.Pipeline.SC.RNASeq.Functions.Clustering
                        Taiji.Pipeline.SC.RNASeq.Functions.Quantification
@@ -28,7 +29,7 @@ library
                        Taiji.Pipeline.SC.RNASeq.Functions.Utils
                        Taiji.Pipeline.SC.RNASeq.Types
 
-  other-modules:       Taiji.Pipeline.SC.RNASeq.Functions.Preprocess.Internal
+  other-modules:       Taiji.Pipeline.SC.RNASeq.Functions.Internal
 
   build-depends:       base >= 4.7 && < 5
                      , aeson
@@ -42,10 +43,14 @@ library
                      , conduit
                      , conduit-extra
                      , containers
+                     , ghc-typelits-knownnat
+                     , ghc-typelits-natnormalise
                      , matrices
+                     , matrix-sized
                      , mwc-random
                      , double-conversion
                      , data-ordlist
+                     , flat
                      , haskell-igraph >= 0.7.0
                      , hashable
                      , HsHTSLib

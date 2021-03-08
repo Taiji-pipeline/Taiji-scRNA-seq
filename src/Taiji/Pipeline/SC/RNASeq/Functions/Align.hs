@@ -30,15 +30,17 @@ mkIndex input
             return input
 
 tagAlign :: SCRNASeqConfig config
-         => SCRNASeq S (File '[Gzip] 'Fastq)
+         => SCRNASeq S (File '[Demultiplexed, Gzip] 'Fastq)
          -> ReaderT config IO (SCRNASeq S (File '[] 'Bam))
 tagAlign input = do
     dir <- asks ((<> "/Bam") . _scrnaseq_output_dir) >>= getPath
     idx <- asks _scrnaseq_star_index
     let outputGenome = printf "%s/%s_rep%d_genome.bam" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
-        f fl = starAlign outputGenome idx (Left fl) opt >>=
-            return . fst . fromLeft undefined
+        f fl = do
+            _ <- starAlign outputGenome idx (Left fl) opt >>=
+                return . fst . fromLeft undefined
+            return $ location .~ outputGenome $ emptyFile
     input & replicates.traverse.files %%~ liftIO . f
   where
     opt = defaultSTAROpts & starCores .~ 8 & starTranscriptome .~ Nothing
@@ -49,14 +51,14 @@ filterNameSortBam :: SCRNASeqConfig config
                   -> ReaderT config IO (SCRNASeq S (File '[NameSorted] 'Bam))
 filterNameSortBam input = do
     dir <- asks ((<> "/Bam") . _scrnaseq_output_dir) >>= getPath
-    let output = printf "%s/%s_rep%d_filt.bam" dir (T.unpack $ input^.eid)
+    let output = printf "%s/%s_rep%d_nsrt.bam" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
     input & replicates.traverse.files %%~ liftIO . ( \fl -> do
         fun fl output
         return $ location .~ output $ emptyFile )
   where
-    fun fl output = withTempFile "./" "tmp_sort." $ \tmp_sort _ ->
+    fun fl output = withTempDir (Just "./") $ \tmp_sort ->
         shelly $ escaping False $ silently $ bashPipeFail bash_ "samtools"
-            [ "view", "-F", "0x70c", "-u", T.pack $ fl^.location, "|"
-            ,  "samtools", "sort", "-", "-n", "-T", T.pack tmp_sort
-            , "-l", "9", "-o", T.pack output ]
+            [ "view", "-@", "2", "-F", "0x70c", "-u", T.pack $ fl^.location, "|"
+            ,  "samtools", "sort", "-@", "2", "-", "-n", "-T", T.pack tmp_sort
+            , "-l", "9", "-m", "4G", "-o", T.pack output ]

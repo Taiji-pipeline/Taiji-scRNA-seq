@@ -6,7 +6,7 @@
 {-# LANGUAGE DataKinds #-}
 module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
     ( combineMatrices
-    , spectral
+    , batchCorrection
     , mkKNNGraph
     , clustering
     , computeStability
@@ -19,16 +19,11 @@ import Data.Singletons.Prelude (Elem)
 import Data.Conduit.Zlib (multiple, ungzip, gzip)
 import qualified Data.ByteString.Char8 as B
 import Data.List.Ordered (nubSort)
-import Data.Conduit.Internal (zipSinks)
-import           Data.CaseInsensitive                 (original)
-import Data.ByteString.Lex.Integral (packDecimal)
-import Bio.Utils.Functions (scale)
-import qualified Data.Vector.Unboxed.Mutable as UM
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector as V
 import qualified Data.HashSet as S
 import Data.Binary (decodeFile)
-import Control.Arrow (first, second)
+import Control.Arrow (first)
 import qualified Data.HashMap.Strict as M
 import qualified Data.Text as T
 import Data.Binary (encodeFile)
@@ -119,6 +114,38 @@ spectral prefix seed input = do
     f (nm, xs) = nm <> "\t" <> fromJust (packDecimal totalReads)
       where
         totalReads = foldl1' (+) $ map snd xs
+
+batchCorrection :: SCRNASeqConfig config
+                => String -> SCRNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv)
+                -> ReaderT config IO (SCRNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv))
+batchCorrection prefix input = do
+    dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
+    asks _scrnaseq_batch_info >>= \case
+        Nothing -> return input
+        Just batchFl -> do
+            let output = printf "%s/%s_rep%d_spectral_corrected.tsv.gz" dir
+                    (T.unpack $ input^.eid) (input^.replicates._1)
+            input & replicates.traversed.files %%~ liftIO . ( \(rownames, fl) -> do
+                idToBatchMap <- M.fromListWith undefined <$> readBatchInfo batchFl
+                let f x = let (i, r) = B.breakEnd (=='_') x
+                          in case M.lookup (B.init i) idToBatchMap of
+                              Nothing -> Nothing
+                              Just (l, g) -> Just (l <> r, g)
+                labels <- map (f . B.init . fst . B.breakEnd (=='+') . head . B.split '\t') . B.lines <$>
+                    B.readFile (rownames^.location)
+                if (all isNothing labels)
+                    then return (rownames, fl)
+                    else do
+                        readData (fl^.location) >>= batchCorrect labels >>= writeData output
+                        return (rownames, location .~ output $ emptyFile)
+                )
+  where
+    readData fl = runResourceT $ runConduit $
+        sourceFile fl .| multiple ungzip .| linesUnboundedAsciiC .|
+        mapC (U.fromList . map readDouble . B.split '\t') .| sinkVector
+    writeData output vec = runResourceT $ runConduit $ yieldMany vec .|
+        mapC (B.intercalate "\t" . map toShortest . U.toList) .|
+        unlinesAsciiC .| gzip .| sinkFile output
 
 mkKNNGraph :: SCRNASeqConfig config
            => FilePath

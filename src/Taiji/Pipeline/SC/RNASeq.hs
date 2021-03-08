@@ -6,7 +6,7 @@ module Taiji.Pipeline.SC.RNASeq ( builder) where
 import           Control.Workflow
 
 import Taiji.Prelude
-import           Taiji.Utils (optimalParam, evalClusters)
+import           Taiji.Utils
 import           Taiji.Pipeline.SC.RNASeq.Functions
 
 builder :: Builder ()
@@ -14,7 +14,7 @@ builder = do
     node "Read_Input" 'readInput $ return ()
 
     uNode "Get_Fastq" [| return . getFastq |]
-    nodePar "Demultiplex" 'extractBarcode $ return ()
+    nodePar "Demultiplex" 'demultiplex $ return ()
     path ["Read_Input", "Get_Fastq", "Demultiplex"]
 
     uNode "Get_Demulti_Fastq" [| \(input, fq) -> return $
@@ -25,7 +25,7 @@ builder = do
     nodePar "Align" 'tagAlign $ do
         nCore .= 8
         memory .= 50
-    nodePar "Filter_Bam" 'filterNameSortBam $ return ()
+    nodePar "Filter_Bam" 'filterNameSortBam $ nCore .= 2
     nodePar "Quantification" 'quantification $ memory .= 8
     nodePar "Filter_Cell" 'filterCells $ return ()
     nodePar "Remove_Doublet" 'removeDoublet $ return ()
@@ -42,18 +42,49 @@ builder = do
         |] $ return ()
     ["Read_Input", "Remove_Doublet"] ~> "Merge_Matrix"
 
+
+--------------------------------------------------------------------------------
+-- Normalization
+--------------------------------------------------------------------------------
+    node "Merged_Fit_NB" [| \case
+        Nothing -> return Nothing
+        Just input -> Just <$> fitNB input
+        |] $ return ()
+    uNode "Merged_Normalization_Prep" [| \case
+        (Just mat, Just param) -> fmap split $ param & replicates.traversed.files %%~ liftIO . ( \fl -> do
+            let matFl = mat^.replicates._2.files._2
+            nCells <- fmap _num_row $ mkSpMatrix id $ matFl^.location
+            let go i | j <= nCells = (i, j) : go j
+                     | i < nCells = [(i, nCells)]
+                     | otherwise = []
+                  where j = i + batchSize
+                batchSize = 50000
+            return $ zip3 (repeat fl) (go 0) (repeat matFl) )
+        _ -> return []
+        |]
+    nodePar "Merged_Normalization" 'normalization $ return ()
+    node "Merged_Feature_Selection" [| selectFeatures 2000 |] $ return ()
+    node "Merged_Spectral_Sample" [| getSpectral 20000 |] $ return ()
+    path ["Merge_Matrix", "Merged_Fit_NB"]
+    ["Merge_Matrix", "Merged_Fit_NB"] ~> "Merged_Normalization_Prep"
+    path ["Merged_Normalization_Prep", "Merged_Normalization"]
+    ["Merge_Matrix", "Merged_Normalization"] ~> "Merged_Feature_Selection"
+    ["Merged_Normalization", "Merged_Feature_Selection"] ~> "Merged_Spectral_Sample"
+
     node "Merged_Reduce_Dimension" [| \case
         Nothing -> return Nothing
-        Just input -> do
-            let prefix = "/Cluster/"
-            fmap Just $ spectral prefix Nothing input
+        Just input -> return undefined -- <$> spectral "/Cluster/" Nothing input
+        |] $ return ()
+    node "Merged_Batch_Correction" [| \case
+        Nothing -> return Nothing
+        Just input -> Just <$> batchCorrection "/Cluster/" input
         |] $ return ()
     node "Merged_Make_KNN" [| \case
         Nothing -> return Nothing
         Just input -> fmap Just $ mkKNNGraph "/Cluster/" $
             input & replicates.traverse.files %~ return
         |] $ return ()
-    path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Make_KNN"]
+    path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Batch_Correction", "Merged_Make_KNN"]
 
 --------------------------------------------------------------------------------
 -- Selecting parameter

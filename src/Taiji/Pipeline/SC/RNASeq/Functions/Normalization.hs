@@ -1,63 +1,197 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DataKinds #-}
 module Taiji.Pipeline.SC.RNASeq.Functions.Normalization
-    ( downSample
+    ( fitNB
+    , normalization
+    , selectFeatures
     ) where 
 
-import Data.Singletons.Prelude (Elem)
-import Data.Conduit.Zlib (multiple, ungzip, gzip)
 import qualified Data.ByteString.Char8 as B
-import Data.List.Ordered (nubSort)
-import Data.Conduit.Internal (zipSinks)
-import           Data.CaseInsensitive                 (original)
-import Data.ByteString.Lex.Integral (packDecimal)
-import Bio.Utils.Functions (scale, kdeWeight)
-import qualified Data.Vector.Unboxed.Mutable as UM
+import Data.Conduit.Internal (zipSources)
+import Bio.Utils.Functions (kdeWeight)
 import qualified Data.Vector.Unboxed as U
-import qualified Data.Vector as V
-import qualified Data.HashSet as S
-import Data.Binary (decodeFile)
-import Control.Arrow (first, second)
-import qualified Data.HashMap.Strict as M
+import qualified Data.Vector.Storable as SV
 import qualified Data.Text as T
-import Data.Binary (encodeFile)
 import Shelly (shelly, run_)
-import Data.Char (toUpper)
-import Numeric.Sampling (psampleIO)
+import Numeric.Sampling (psample)
 import System.Random.MWC
+import Data.Conduit.List (chunksOf)
 
-import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..))
-import qualified Taiji.Utils.DataFrame as DF
+import qualified Data.Matrix.Static.Dense as D
+import qualified Data.Matrix.Static.Sparse as S
+import Data.Matrix.Dynamic (fromTriplet, withDyn, Dynamic(..))
+import Data.Matrix.Static.LinearAlgebra hiding (colSum)
+import qualified Data.Matrix.Static.LinearAlgebra as L
+import Data.Singletons.Prelude hiding ((@@))
+import Flat (flat, unflat)
+
+import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..), SCRNASeq)
 import Taiji.Prelude
 import Taiji.Utils
 
-downSample :: Int -> SpMatrix Int -> IO (SpMatrix Int)
-downSample n mat 
-    | n >= c = return mat
-    | otherwise = do
-        weights <- U.map (\x -> 1 / x) . kdeWeight 1024 . U.map (\x -> exp (x / fromIntegral r) - 1) <$>
-            colSum (fmap (\x -> log $ fromIntegral x + 1) mat)
-        let probs = let s = U.sum weights in U.map (/s) weights
+fitNB :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
+      => SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)
+      -> ReaderT config IO (SCRNASeq S FilePath)
+fitNB input = do
+    dir <- asks ((<> "/Quantification/Normalization/") . _scrnaseq_output_dir) >>= getPath
+    let output = printf "%s/%s_rep%d_model_parameters.txt" dir
+            (T.unpack $ input^.eid) (input^.replicates._1)
+    input & replicates.traversed.files %%~ liftIO . ( \(r, fl) -> withTempDir Nothing $ \tmpdir -> do
+        let tmpMat = tmpdir <> "/tmp.mat.gz"
+            tmpRow = tmpdir <> "/row.txt"
+            tmpCol = tmpdir <> "/col.txt"
+            tmpGeneMean = tmpdir <> "/geneMean.txt"
         gen <- create
-        sample <- fmap (S.fromList . fromJust) $ psampleIO n $ zip (U.toList probs) [0..]
-        let idx = filter (not . (`S.member` sample)) [0..c-1]
-        return $ deleteCols idx mat
+
+        cellByGene <- mkSpMatrix readInt $ fl^.location
+        let totalCell = _num_row cellByGene
+            totalGene = _num_col cellByGene
+            nGene = 2000
+            nCell = 30000
+
+        -- Compute geometric mean for each gene
+        geneMean <- U.map (\x -> exp (x / fromIntegral totalCell) - 1) <$>
+            colSum (fmap (\x -> log $ fromIntegral x + 1) cellByGene)
+        (col, mat) <- if totalGene > nGene
+            then do
+                geneIdx <- kdeSampling gen nGene geneMean
+                return (map (geneMean U.!) geneIdx, selectCols geneIdx cellByGene)
+            else
+                return (U.toList geneMean, cellByGene)
+
+        -- Compute log10(totalReads) for each cell
+        cellReads <- runResourceT $ runConduit $ streamRows cellByGene .|
+            mapC (logBase 10 . fromIntegral . foldl1' (+) . map snd . snd) .|
+            sinkVector
+        (row, cellByGene') <- if totalCell > nCell
+            then do
+                cellIdx <- kdeSampling gen nCell cellReads
+                return (map (cellReads U.!) cellIdx, selectRows cellIdx mat)
+            else 
+                return (U.toList cellReads, mat)
+
+        B.writeFile tmpRow $ B.unlines $ map toShortest row
+        B.writeFile tmpCol $ B.unlines $ map toShortest col
+        B.writeFile tmpGeneMean $ B.unlines $ map toShortest $ U.toList geneMean
+        saveMatrix tmpMat (fromJust . packDecimal) cellByGene'
+        shelly $ run_ "taiji-utils" $ map T.pack ["normalize", tmpMat, tmpCol, tmpRow, tmpGeneMean, output]
+        return output
+        )
+
+normalization :: SCRNASeqConfig config
+              => SCRNASeq S (FilePath, (Int, Int), File tags 'Other)
+              -> ReaderT config IO (SCRNASeq S [(Int, FilePath, FilePath)])
+normalization input = do
+    dir <- asks ((<> "/Quantification/Normalization/") . _scrnaseq_output_dir) >>= getPath
+    input & replicates.traversed.files %%~ liftIO . ( \(params, (i,j), fl) -> do
+        [beta_0, beta_1, alpha] <- map (SV.fromList . map readDouble . B.words) . B.lines <$>
+            B.readFile params
+        mat <- mkSpMatrix readDouble $ fl^.location
+        let f (b, Dynamic m@(D.Matrix _)) = do
+                let output = printf "%s/normalized_gene_count_%d-%d_%d.bin" dir i j b
+                    outputSummary = printf "%s/normalized_gene_count_summary_%d-%d_%d.bin" dir i j b
+                let [s] = D.toRows $ L.colSum m
+                    [s_2] = D.toRows $ L.colSum $ D.map (\x -> x * x) m
+                liftIO $ do
+                    B.writeFile output $ flat m
+                    B.writeFile outputSummary $ flat $ U.zip (U.convert s) (U.convert s_2)
+                return (D.rows m, output, outputSummary)
+            batchSize = 2000
+        runResourceT $ runConduit $
+            zipSources (iterateC succ (0 :: Int)) (predictBatch i j batchSize mat beta_0 beta_1 alpha) .|
+            mapMC f .| sinkList
+        )
+
+predictBatch :: Int -> Int -> Int
+             -> SpMatrix Double
+             -> SV.Vector Double    -- ^ beta_0
+             -> SV.Vector Double    -- ^ beta_1
+             -> SV.Vector Double    -- ^ alpha
+             -> ConduitT () (Dynamic D.Matrix SV.Vector Double) (ResourceT IO) ()
+predictBatch i j bs mat beta0' beta1' alpha' = readSparseMatrixChunk mat i j bs .| mapC f
   where
-    r = _num_row mat
-    c = _num_col mat
+    f (Dynamic (sp@(S.SparseMatrix _ _ _) :: S.SparseMatrix c g SV.Vector Double)) = do
+        let beta0 = D.fromVector beta0' :: Matrix 1 g Double
+            beta1 = D.fromVector beta1' :: Matrix 1 g Double
+            alpha = D.fromVector alpha' :: Matrix 1 g Double
+            mu = expectedCount beta0 beta1 $ D.map (logBase 10) $ rowSum sp
+            sigma = expectedStd alpha mu
+         in Dynamic $ D.map (max (negate clipValue) . min clipValue) $
+                pearsonResidual mu sigma sp
+    clipValue = sqrt 30000
+{-# INLINE predictBatch #-}
 
-{-
--- | Perform log normalization
-logNorm :: 
-    f (nm, xs) = ( nm <> "\t" <> fromJust (packDecimal totalReads)
-                 , (nm, map normalize xs) )
+readSparseMatrixChunk :: SpMatrix Double
+                      -> Int   -- ^ Starting row index, inclusive
+                      -> Int   -- ^ End row index, exclusive
+                      -> Int   -- ^ Chunk size
+                      -> ConduitT () (Dynamic S.SparseMatrix SV.Vector Double) (ResourceT IO) ()
+readSparseMatrixChunk mat s e size = streamRows mat .| (dropC s >> takeC n) .| chunksOf size .| mapC f
+  where
+    f chunk = fromTriplet (length chunk, _num_col mat) $ U.fromList $ concat $ zipWith g [0..] chunk
       where
-        totalReads = foldl1' (+) $ map snd xs
-        normalize (i, x) = (i, log1p $ fromIntegral x / (fromIntegral totalReads / 10000))
-        log1p x = log $ 1 + x :: Double
--}
+        g i (_, xs) = map (\(j,x) -> (i,j,x)) xs
+    n = e - s
+{-# INLINE readSparseMatrixChunk #-}
 
+expectedCount ::(SingI c, SingI g) 
+              => Matrix 1 g Double   -- ^ beta_0
+              -> Matrix 1 g Double   -- ^ beta_1
+              -> Matrix c 1 Double   -- ^ log10 of total reads of the cell
+              -> Matrix c g Double
+expectedCount beta0 beta1 lg_m = D.map exp $ (ones @@ beta0) + (lg_m @@ beta1)
+{-# INLINE expectedCount #-}
+
+expectedStd :: (SingI c, SingI g)
+            => Matrix 1 g Double   -- ^ alpha
+            -> Matrix c g Double
+            -> Matrix c g Double
+expectedStd alpha mu = D.map sqrt $ mu + ((ones @@ alpha) * D.map (\x -> x * x) mu)
+{-# INLINE expectedStd #-}
+
+pearsonResidual :: (SingI c, SingI g)
+                => Matrix c g Double
+                -> Matrix c g Double
+                -> SparseMatrix c g Double
+                -> Matrix c g Double
+pearsonResidual mu sigma x = (x %-% mu) / sigma 
+{-# INLINE pearsonResidual #-}
+
+kdeSampling :: PrimMonad m
+            => Gen (PrimState m)
+            -> Int   -- ^ Number of samples
+            -> U.Vector Double  -- ^ Input
+            -> m [Int]   -- ^ index
+kdeSampling gen n xs = fromJust <$>
+    psample n (zip (U.toList $ U.map recip $ kdeWeight 10000 xs) [0..]) gen
+{-# INLINE kdeSampling #-}
+
+selectFeatures :: SCRNASeqConfig config
+               => Int   -- ^ Number of features
+               -> ( Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other))
+                  , [SCRNASeq S [(Int, FilePath, FilePath)]] )
+               -> ReaderT config IO [Int]
+selectFeatures n (Just input1, input2) = liftIO $ do
+    mat <- mkSpMatrix id $ input1^.replicates._2.files._2.location
+    mv <- fmap U.toList $
+        meanVarC (input2^..folded.replicates._2.files.folded._3) (_num_row mat) (_num_col mat)
+    genes <- fmap (map (head . words) . lines) $ readFile $ input1^.replicates._2.files._1.location
+    return $ map fst $ take n $ sortBy (flip (comparing snd)) $ zip [0..] $ map snd mv
+selectFeatures _ _ = return []
+
+meanVarC :: [FilePath] -> Int -> Int -> IO (U.Vector (Double, Double))
+meanVarC fls r c = runConduit $ fmap (U.map g) $ yieldMany fls .| foldMC f (U.replicate c (0, 0))
+  where
+    g (m, v) = let m' = m / fromIntegral r
+                in (m', v / fromIntegral r - m' * m')
+    f vec fl = do
+        vec' <- either (error . show) id . unflat <$> B.readFile fl
+        return $ U.zipWith (\(a,b) (a',b') -> (a+a', b+b')) vec' vec

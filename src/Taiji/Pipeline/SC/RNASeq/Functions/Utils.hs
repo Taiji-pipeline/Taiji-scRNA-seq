@@ -24,5 +24,5 @@ groupOnC fun = await >>= (maybe (return ()) $ \b -> go (fun b) $ yield b)
 getIndex :: B.ByteString -> (B.ByteString, B.ByteString)
 getIndex x = (a,b)
   where
-    [a,b] = B.split '+' $ head $ B.split '_' x
+    [a,b] = B.split '_' $ fst $ B.break (==':') x
 {-# INLINE getIndex #-}

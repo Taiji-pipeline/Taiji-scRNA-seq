@@ -41,9 +41,10 @@ instance Binary (container (Replicate file)) =>
 class SCRNASeqConfig config where
     _scrnaseq_input :: config -> FilePath
     _scrnaseq_output_dir :: config -> Directory
+    _scrnaseq_batch_info :: config -> Maybe FilePath
     _scrnaseq_tmp_dir :: config -> Maybe FilePath
-    _scrnaseq_cell_barcode_length :: config -> Int
-    _scrnaseq_molecular_barcode_length :: config -> Int
+    _scrnaseq_cell_barcode_length :: config -> Maybe Int
+    _scrnaseq_molecular_barcode_length :: config -> Maybe Int
     _scrnaseq_star_index :: config -> FilePath
     _scrnaseq_genome_fasta :: config -> Maybe FilePath
     _scrnaseq_annotation :: config -> FilePath

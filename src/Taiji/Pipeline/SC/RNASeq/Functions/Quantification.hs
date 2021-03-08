@@ -11,15 +11,12 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Quantification
 
 import           Bio.Data.Bam
 import           Bio.Data.Bed
-import           Bio.Utils.Misc (readInt)
 import Data.Conduit.Zlib (gzip)
-import           Bio.Data.Bed.Types
 import Data.Char (toLower)
 import Language.Javascript.JMacro
 import           Bio.Pipeline
 import           Bio.RealWorld.GENCODE
 import           Data.Conduit.Internal (zipSinks, zipSources)
-import Data.ByteString.Lex.Integral (packDecimal)
 import Data.List.Ordered
 import qualified Data.ByteString.Char8                as B
 import           Data.CaseInsensitive                 (original)
