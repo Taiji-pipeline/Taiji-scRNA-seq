@@ -13,24 +13,24 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Spectral
     , spectral
     , spectralEmbedC
     , getSpectral
+    , nystromExtend
+    , outputReduced
     , rbf
     ) where
 
 import Data.Matrix.Static.LinearAlgebra
 import qualified Data.ByteString.Char8 as B
-import Control.Monad.ST (runST)
+import qualified Data.Text as T
 import qualified Data.Vector.Storable as V
 import qualified Data.Matrix.Static.Generic as G
-import qualified Data.Matrix.Static.Generic.Mutable as GM
 import qualified Data.Matrix.Static.Dense as D
 import qualified Data.Matrix.Static.Sparse as S
 import qualified Data.Matrix.Storable as MS
-import Data.Matrix.Dynamic (Dynamic(..), withDyn, fromVector)
+import Data.Matrix.Dynamic (Dynamic(..), withDyn, fromVector, fromRows)
 import qualified Data.Vector.Unboxed as U
 import Data.Singletons.Prelude hiding ((@@), type (==))
-import Data.Complex
-import Data.Conduit.List (chunksOf)
 import Conduit
+import Data.Conduit.Zlib (gzip)
 import Data.Type.Equality
 import Data.Singletons.TypeLits
 import Data.Singletons.Decide (decideEquality)
@@ -39,6 +39,7 @@ import System.Random.MWC
 import Flat (flat, unflat)
 
 import Taiji.Prelude
+import Taiji.Utils
 import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..), SCRNASeq)
 
 getSpectral :: SCRNASeqConfig config
@@ -55,15 +56,14 @@ getSpectral sampleSize (input, cidx') = do
       gen <- create
       mat <- fmap (MS.fromBlocks 0 . map return) $ runConduit $
           yieldMany (zip sampleCells matFls) .| mapMC (f gen) .| sinkList
-      let mat' = fromVector (MS.dim mat) $ MS.flatten mat :: Dynamic D.Matrix V.Vector Double
-      B.writeFile output1 $ flat mat'
-      withDyn mat' $ \(m@(D.Matrix _) :: Matrix n k Double)  -> do
-          let dm = rbf m m :: Matrix n n Double
-              left = sing :: Sing 31
+      withDyn (fromVector (MS.dim mat) $ MS.flatten mat) $ \(m@(D.Matrix _) :: Matrix n k Double)  -> do
+          B.writeFile output1 $ flat m
+          let left = sing :: Sing 31
               right = (sing :: Sing n) %- (sing :: Sing 2)
           case decideEquality (left %<=? right) STrue of
               Just Refl -> do
-                  let Spectral s1 s2 = spectral (sing :: Sing 30) dm
+                  let Spectral s1 s2 = spectral (sing :: Sing 30) $
+                          D.imap (\(i,j) x -> if i == j then 0 else x) $ rbf m m
                   B.writeFile output2 $ flat s1
                   B.writeFile output3 $ flat s2
                   return $ Just (output1, output2, output3)
@@ -83,28 +83,73 @@ getSpectral sampleSize (input, cidx') = do
     total = fromIntegral $ foldl1' (+) rs :: Double
     cidx = U.fromList cidx'
 
-{-
 nystromExtend :: SCRNASeqConfig config
-            -> ([SCRNASeq S [(Int, FilePath, FilePath)]], [Int], Maybe (FilePath, FilePath, FilePath))
-            -> ReaderT config IO ()
-nystromExtend (_, _, Just (fl1, fl2, fl3)) = do
--}
+            => (SCRNASeq S [(Int, FilePath, FilePath)], [Int], Maybe (FilePath, FilePath, FilePath))
+            -> ReaderT config IO FilePath
+nystromExtend (input, cidx', Just (fl1, fl2, fl3)) = do
+    dir <- asks ((<> "/Spectral/") . _scrnaseq_output_dir) >>= getPath
+    let output = dir <> T.unpack (input^.eid) <> "_nystrom.bin"
+    liftIO $ do
+        sm <- either (error . show) id . unflat <$> B.readFile fl1
+        s1 <- either (error . show) id . unflat <$> B.readFile fl2
+        s2 <- either (error . show) id . unflat <$> B.readFile fl3
+        mats <- runConduit $ yieldMany matFls .| mapMC f .| spectralEmbedC sm s1 s2 .| sinkList
+        let mat = fromRows $ concatMap (\(Dynamic x@(D.Matrix _)) -> D.toRows x) mats :: Dynamic D.Matrix V.Vector Double
+        B.writeFile output $ flat mat
+        return output
+  where
+    matFls = map (^._2) $ input^.replicates._2.files
+    f fl = do
+        Dynamic (mat :: Matrix m n Double) <- either (error . show) id . unflat <$> B.readFile fl
+        let r = D.rows mat
+            c = U.length cidx
+        return $! fromVector (r, c) $ MS.flatten $
+            MS.generate (r, c) $ \(i, j) -> mat `D.unsafeIndex` (i, cidx U.! j)
+    cidx = U.fromList cidx'
+nystromExtend _ = error ""
+
+outputReduced :: SCRNASeqConfig config
+              => (Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)), [FilePath])
+              -> ReaderT config IO (Maybe (SCRNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv)))
+outputReduced (Just input, matFls) = do
+    dir <- asks ((<> "/Spectral/") . _scrnaseq_output_dir) >>= getPath
+    let output = printf "%s/%s_rep%d_reduced.tsv.gz" dir
+            (T.unpack $ input^.eid) (input^.replicates._1)
+        rownames = printf "%s/%s_rep%d_rownames.txt" dir
+            (T.unpack $ input^.eid) (input^.replicates._1)
+    fmap Just $ input & replicates.traversed.files %%~ liftIO . ( \(_, fl) -> do
+        sp <- mkSpMatrix readInt $ fl^.location
+        _ <- runResourceT $ runConduit $ streamRows sp .| mapC g .|
+            unlinesAsciiC .| sinkFile rownames
+        runResourceT $ runConduit $ yieldMany matFls .| mapMC f .| concatC .|
+            mapC (B.unwords . map (B.pack . show) . V.toList) .|
+            unlinesAsciiC .| gzip .| sinkFile output
+        return ( location .~ rownames $ emptyFile
+               , location .~ output $ emptyFile )
+        )
+  where
+    f fl = liftIO $ do
+        mat <- either (error . show) id . unflat <$> B.readFile fl :: IO (Dynamic D.Matrix V.Vector Double)
+        return $! withDyn mat D.toRows
+    g (nm, xs) = nm <> "\t" <> fromJust (packDecimal totalReads)
+      where
+        totalReads = foldl1' (+) $ map snd xs
+outputReduced _ = return Nothing
 
 data Spectral n k = Spectral (SparseMatrix k k Double) (Matrix n k Double)
 
 -- | Perform spectral embedding using random-walk Lapacian.
-spectral :: forall k n. (SingI k, SingI n, (k + 1 <=? n - 2) ~ 'True)
+spectral :: forall k n. (SingI k, SingI n, (k + 1 <=? n - 1) ~ 'True)
          => Sing k
          -> Matrix n n Double    -- ^ Similarity matrix
          -> Spectral n k
 spectral k _S@(D.Matrix _) = Spectral
-    (S.diag $ G.unsafeFromVector $ V.tail $ G.flatten $ G.map (\x -> 1 / realPart x) eval)
-    (G.fromColumns $ tail $ G.toColumns $ G.map realPart evec)
+    (S.diag $ G.unsafeFromVector $ V.tail $ G.flatten $ G.map (\x -> 1 / x) eval)
+    (G.fromColumns $ tail $ G.toColumns evec)
   where
-    (eval, evec) = case k' of SNat -> eigS k' _P
+    (eval, evec) = case k' of SNat -> geigSH' k' _S _D defaultEigenOptions{_sort_rule = LA}
+    _D = S.diag $ rowSum _S
     k' = k %+ (SNat :: Sing 1)
-    _P = _D' @@ _S
-    _D' = S.diag $ G.map recip $ rowSum _S
 {-# INLINE spectral #-}
 
 spectralEmbedC :: Monad m

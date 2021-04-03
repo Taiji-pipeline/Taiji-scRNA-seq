@@ -9,23 +9,26 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Preprocess
     , getFastq
     , getDemultiplexedFastq
     , getMatrix
+    , getValidBarcode
     , demultiplex
     ) where
 
+import qualified Data.IntMap.Strict as I
 import           Bio.Data.Experiment.Parser
 import           Bio.Data.Experiment.Types
 import           Bio.Pipeline
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
-import Bio.Data.Fastq (streamFastqGzip)
+import qualified Bio.Data.Fastq as Fq
+import Data.Conduit.Internal (zipSources)
 import Control.Arrow ((***))
 import Shelly hiding (FilePath)
 import Data.Either (lefts, rights)
 import qualified Data.ByteString.Char8                as B
 import Language.Javascript.JMacro
+import Control.DeepSeq (force)
 
 import           Taiji.Pipeline.SC.RNASeq.Types
-import Taiji.Pipeline.SC.RNASeq.Functions.Internal
 import Taiji.Utils.Plot
 import Taiji.Utils.Plot.ECharts
 import Taiji.Prelude
@@ -77,25 +80,48 @@ getMatrix inputs = concatMap split $ concatMap split $
         [x] -> Just $ fromSomeFile x
         _ -> error "Found multiple column name files in the input"
 
-demultiplex :: SCRNASeqConfig config
-            => SCRNASeq S (File '[Gzip] 'Fastq, File '[Gzip] 'Fastq)
-            -> ReaderT config IO (SCRNASeq S (File '[Demultiplexed, Gzip] 'Fastq))
-demultiplex input = do
-    bcLen <- fromMaybe (error "cell barcode length was not provided") <$> asks _scrnaseq_cell_barcode_length
-    umiLen <- fromMaybe (error "UMI length was not provided") <$> asks _scrnaseq_molecular_barcode_length 
-    dir <- asks ((<> "/Fastq") . _scrnaseq_output_dir) >>= getPath
-    let output = printf "%s/%s_rep%d_demulti.fastq.gz" dir (T.unpack $ input^.eid)
+getValidBarcode :: SCRNASeqConfig config
+                => SCRNASeq S (File '[Gzip] 'Fastq, File '[Gzip] 'Fastq)
+                -> ReaderT config IO ( SCRNASeq S
+                    (File '[Gzip] 'Fastq, File '[Gzip] 'Fastq, File '[] 'Tsv) )
+getValidBarcode input = do
+    bcLen <- fromIntegral . fromMaybe (error "cell barcode length was not provided") <$>
+        asks _scrnaseq_cell_barcode_length
+    dir <- asks ((<> "/Fastq/Barcode/") . _scrnaseq_output_dir) >>= getPath
+    let output = printf "%s/%s_rep%d_barcode_count.tsv" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
         outputKnee = printf "%s/%s_rep%d_knee.html" dir (T.unpack $ input^.eid)
             (input^.replicates._1)
-    input & replicates.traverse.files %%~ ( \(fq1, fq2) -> liftIO $ withTemp Nothing $ \tmp -> do
-        stat <- runResourceT $ runConduit $ streamFastqGzip (fq1^.location) .|
+    input & replicates.traverse.files %%~ ( \(fq1, fq2) -> liftIO $ do
+        stat <- runResourceT $ runConduit $ Fq.streamFastqGzip (fq1^.location) .|
             takeC 100000000 .| barcodeStat bcLen
-        B.writeFile tmp $ B.unlines $ map (B.pack . show . snd) $ U.toList stat
+        B.writeFile output $ B.unlines $
+            map (\(a, b) -> intToDna a <> "\t" <> (B.pack . show) b) $ U.toList stat
         thres <- fmap (read . T.unpack . head . T.lines) $ shelly $
-            run "taiji-utils" ["barcode", T.pack tmp]
+            run "taiji-utils" ["barcode", T.pack output]
+        B.writeFile output $ B.unlines $
+            (("Number of valid cells" <> "\t" <> B.pack (show (thres :: Double))) :) $
+            map (\(a, b) -> intToDna a <> "\t" <> (B.pack . show) b) $ U.toList stat
         kneePlot outputKnee (truncate thres) $ U.map snd stat
-        let bcMap = mkBarcodeMap $ map fst $ take (truncate (thres :: Double)) $ U.toList stat
+        return (fq1, fq2, location .~ output $ emptyFile)
+        )
+
+demultiplex :: SCRNASeqConfig config
+            => SCRNASeq S (File '[Gzip] 'Fastq, File '[Gzip] 'Fastq, File '[] 'Tsv)
+            -> ReaderT config IO (SCRNASeq S (File '[Demultiplexed, Gzip] 'Fastq))
+demultiplex input = do
+    bcLen <- fromIntegral . fromMaybe (error "cell barcode length was not provided") <$>
+        asks _scrnaseq_cell_barcode_length
+    umiLen <- fromIntegral . fromMaybe (error "UMI length was not provided") <$>
+        asks _scrnaseq_molecular_barcode_length 
+    dir <- asks ((<> "/Fastq") . _scrnaseq_output_dir) >>= getPath
+    let output = printf "%s/%s_rep%d_demulti.fastq.gz" dir (T.unpack $ input^.eid)
+            (input^.replicates._1)
+    input & replicates.traverse.files %%~ ( \(fq1, fq2, statFl) -> liftIO $ do
+        content <- B.lines <$> B.readFile (statFl^.location)
+        let thres = truncate $ readDouble $ last $ B.split '\t' $ head content
+            stat = map ((\[a,b] -> (dnaToInt a, readInt b)) . B.split '\t') $ tail content
+        let bcMap = mkBarcodeMap $ map fst $ take thres stat
         demulti output bcMap bcLen umiLen (fq1^.location) (fq2^.location)
         return $ location .~ output $ emptyFile
         )
@@ -128,54 +154,15 @@ kneePlot output thres input = savePlots output [] [plt']
         | x' /= x && i == i' + 1 = ((i+1, x) : acc, (i, x))
         | otherwise = ((i+1, x) : (i, x') : acc, (i, x))
 
-{-
--- | Extract barcode: @barcode+umi:seq_name
-extractBarcode :: SCRNASeqConfig config
-               => SCRNASeq S (SomeTags 'Fastq, SomeTags 'Fastq)
-               -> ReaderT config IO (SCRNASeq S (File '[Gzip] 'Fastq))
-extractBarcode input = input & replicates.traverse.files %%~ fun
+demulti :: FilePath -> I.IntMap Int -> Int -> Int -> FilePath -> FilePath -> IO ()
+demulti out bcMap bcLen umiLen fqidxFl fqFl = runResourceT $ runConduit $
+    zipSources (Fq.streamFastqGzip fqidxFl .| mapC getBc) (Fq.streamFastqGzip fqFl) .|
+    concatMapC f .| Fq.sinkFastqGzip out
   where
-    fun (flRead1, flRead2) = do
-        outdir <- asks ((<> "/Fastq") . _scrnaseq_output_dir) >>= getPath
-        qdir <- qcDir
-        lenCellBc <- asks _scrnaseq_cell_barcode_length
-        lenUmi <- asks _scrnaseq_molecular_barcode_length
-        liftIO $ do
-            shelly $ test_px "umi_tools" >>= \case
-                True -> return ()
-                False -> error "Please install umi_tools: https://github.com/CGATOxford/UMI-tools"
-            let output = printf "%s/%s_demux.fastq.gz" outdir (T.unpack $ input^.eid)
-                whitelistFl = printf "%s/%s_whitelist.tsv" outdir (T.unpack $ input^.eid)
-                plt = printf "%s/%s_knee_plot" qdir (T.unpack $ input^.eid)
-            whitelist <- getWhiteList lenCellBc lenUmi (read1^.location) plt
-            saveWhiteList whitelistFl whitelist
-            demultiplex output (read1^.location) (read2^.location)
-                whitelist lenCellBc lenUmi
-            return $ emptyFile & location .~ output
-      where
-        read1 = fromSomeTags flRead1 :: File '[] 'Fastq
-        read2 = fromSomeTags flRead2 :: File '[] 'Fastq
-
-type Whitelist = M.HashMap B.ByteString B.ByteString
-
-saveWhiteList :: FilePath -> Whitelist -> IO ()
-saveWhiteList output = B.writeFile output . B.unlines .
-    map (\(a,b) -> a <> "\t" <> B.intercalate "," b) . M.toList .
-    M.fromListWith (++) . map (\(a,b) -> (b, [a])) . M.toList
-{-# INLINE saveWhiteList #-}
-
-getWhiteList :: Int   -- ^ cell barcode length
-             -> Int   -- ^ umi length
-             -> FilePath
-             -> FilePath
-             -> IO Whitelist
-getWhiteList nBc nUmi input plt = fmap
-    (M.fromList . concatMap (f . B.split '\t') . B.lines . B.pack . T.unpack) $
-    shelly $ run "umi_tools"
-        [ "whitelist", "--stdin", T.pack input
-        , "--plot-prefix=" <> T.pack plt
-        , "--bc-pattern=" <> T.pack (replicate nBc 'C' <> replicate nUmi 'N')
-        , "--log2stderr" ]
-  where
-    f (a:b:_) = zip (a : B.split ',' b) $ repeat a
-    -}
+    getBc x = let bc = dnaToInt $ B.take bcLen $ Fq.fastqSeq x
+                  umi = B.take umiLen $ B.drop bcLen $ Fq.fastqSeq x
+              in (bc, umi)
+    f :: ((Int, B.ByteString), Fq.Fastq) -> Maybe Fq.Fastq
+    f ((bc, umi), fq) = force $ case I.lookup bc bcMap of
+        Nothing -> Nothing
+        Just bc' -> Just fq{Fq.fastqSeqId = B.concat [intToDna bc', "_", umi, ":", Fq.fastqSeqId fq]}

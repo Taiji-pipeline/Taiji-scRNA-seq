@@ -29,8 +29,6 @@ library
                        Taiji.Pipeline.SC.RNASeq.Functions.Utils
                        Taiji.Pipeline.SC.RNASeq.Types
 
-  other-modules:       Taiji.Pipeline.SC.RNASeq.Functions.Internal
-
   build-depends:       base >= 4.7 && < 5
                      , aeson
                      , binary
@@ -50,6 +48,7 @@ library
                      , mwc-random
                      , double-conversion
                      , data-ordlist
+                     , deepseq
                      , flat
                      , haskell-igraph >= 0.7.0
                      , hashable

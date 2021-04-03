@@ -4,6 +4,7 @@
 module Taiji.Pipeline.SC.RNASeq ( builder) where
 
 import           Control.Workflow
+import qualified Data.Text as T
 
 import Taiji.Prelude
 import           Taiji.Utils
@@ -14,8 +15,9 @@ builder = do
     node "Read_Input" 'readInput $ return ()
 
     uNode "Get_Fastq" [| return . getFastq |]
+    nodePar "Barcode_Stat" 'getValidBarcode $ return ()
     nodePar "Demultiplex" 'demultiplex $ return ()
-    path ["Read_Input", "Get_Fastq", "Demultiplex"]
+    path ["Read_Input", "Get_Fastq", "Barcode_Stat", "Demultiplex"]
 
     uNode "Get_Demulti_Fastq" [| \(input, fq) -> return $
         getDemultiplexedFastq input ++ fq |]
@@ -51,29 +53,49 @@ builder = do
         Just input -> Just <$> fitNB input
         |] $ return ()
     uNode "Merged_Normalization_Prep" [| \case
-        (Just mat, Just param) -> fmap split $ param & replicates.traversed.files %%~ liftIO . ( \fl -> do
-            let matFl = mat^.replicates._2.files._2
-            nCells <- fmap _num_row $ mkSpMatrix id $ matFl^.location
-            let go i | j <= nCells = (i, j) : go j
-                     | i < nCells = [(i, nCells)]
-                     | otherwise = []
-                  where j = i + batchSize
-                batchSize = 50000
-            return $ zip3 (repeat fl) (go 0) (repeat matFl) )
+        (Just mat, Just param) -> fmap (map (\x ->
+            let (i, j) = x^.replicates._2.files._2
+            in x & eid .~ (T.pack $ printf "%d_%d" i j) ) . split) $
+            param & replicates.traversed.files %%~ liftIO . ( \fl -> do
+                let matFl = mat^.replicates._2.files._2
+                nCells <- fmap _num_row $ mkSpMatrix id $ matFl^.location
+                let go i | j <= nCells = (i, j) : go j
+                         | i < nCells = [(i, nCells)]
+                         | otherwise = []
+                      where j = i + batchSize
+                    batchSize = 50000
+                return $ zip3 (repeat fl) (go 0) (repeat matFl) )
         _ -> return []
         |]
     nodePar "Merged_Normalization" 'normalization $ return ()
     node "Merged_Feature_Selection" [| selectFeatures 2000 |] $ return ()
-    node "Merged_Spectral_Sample" [| getSpectral 20000 |] $ return ()
     path ["Merge_Matrix", "Merged_Fit_NB"]
     ["Merge_Matrix", "Merged_Fit_NB"] ~> "Merged_Normalization_Prep"
     path ["Merged_Normalization_Prep", "Merged_Normalization"]
-    ["Merge_Matrix", "Merged_Normalization"] ~> "Merged_Feature_Selection"
+    ["Merge_Matrix", "Merged_Normalization", "Merged_Fit_NB"] ~> "Merged_Feature_Selection"
+
+
+--------------------------------------------------------------------------------
+-- 
+--------------------------------------------------------------------------------
+    {-
+    node "Merged_Spectral_Sample" [| getSpectral 20000 |] $ return ()
+    uNode "Merged_Spectral_Nystrom_Prep" [| \(a,b,c) -> 
+        return $ zip3 a (repeat b) $ repeat c |]
+    nodePar "Merged_Spectral_Nystrom" 'nystromExtend $ return ()
     ["Merged_Normalization", "Merged_Feature_Selection"] ~> "Merged_Spectral_Sample"
+    ["Merged_Normalization", "Merged_Feature_Selection", "Merged_Spectral_Sample"] ~> "Merged_Spectral_Nystrom_Prep"
+    path ["Merged_Spectral_Nystrom_Prep", "Merged_Spectral_Nystrom"]
+
+    node "Merged_Reduce_Dimension" 'outputReduced $ return ()
+    ["Merge_Matrix", "Merged_Spectral_Nystrom"] ~> "Merged_Reduce_Dimension"
+    -}
 
     node "Merged_Reduce_Dimension" [| \case
         Nothing -> return Nothing
-        Just input -> return undefined -- <$> spectral "/Cluster/" Nothing input
+        Just input -> do
+            let prefix = "/Cluster/"
+            fmap Just $ old_spectral prefix Nothing input
         |] $ return ()
     node "Merged_Batch_Correction" [| \case
         Nothing -> return Nothing
@@ -100,9 +122,9 @@ builder = do
         _ -> return []
         |]
     ["Merged_Reduce_Dimension", "Merged_Make_KNN"] ~> "Merged_Param_Search_Prep"
-    nodePar "Merged_Param_Search" [| \(optimizer, r, spectral, knn) -> do
-        res <- liftIO $ evalClusters optimizer r spectral knn
-        return (r, res)
+    nodePar "Merged_Param_Search" [| \(optimizer, r, spectral, knn) -> undefined 
+        --res <- liftIO $ evalClusters optimizer r spectral knn
+        --return (r, res)
         |] $ return ()
     path ["Merged_Param_Search_Prep", "Merged_Param_Search"]
 

@@ -13,6 +13,7 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
     , pickResolution
     , segregateCells
     , mkExprTable
+    , old_spectral
     ) where 
 
 import Data.Singletons.Prelude (Elem)
@@ -73,26 +74,26 @@ combineMatrices inputs = do
             Left (idxFl, rownameFl, matFl) -> do
                 rownames <- readIndex rownameFl
                 idx <- V.map (B.map toUpper) <$> readIndex idxFl
-                mat <- transformation (addPrefix e) <$>
+                mat <- mapRows (addPrefix e) <$>
                     mkSpMatrixMM (matFl^.location) rownames
                 return (idx, mat)
             Right (idxFl, matFl) -> do
                 idx <- V.map (B.map toUpper) <$> readIndex idxFl
-                mat <- transformation (addPrefix e) <$>
+                mat <- mapRows (addPrefix e) <$>
                     mkSpMatrix readInt (matFl^.location)
                 return (idx, mat)
-    addPrefix x = mapC $ first (\n -> x <> "+" <> n) 
+    addPrefix x = first (\n -> x <> "+" <> n) 
     readIndex x = runResourceT $ runConduit $ sourceFile (x^.location) .|
         multiple ungzip .| linesUnboundedAsciiC .|
         mapC (head . B.words) .| sinkVector
 
 -- | Reduce dimensionality using spectral clustering
-spectral :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
+old_spectral :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
          => FilePath  -- ^ directory
          -> Maybe Int  -- ^ seed
          -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)
          -> ReaderT config IO (SCRNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv))
-spectral prefix seed input = do
+old_spectral prefix seed input = do
     dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_spectral.tsv.gz" dir
             (T.unpack $ input^.eid) (input^.replicates._1)
@@ -211,7 +212,7 @@ clustering' dir method res (idx, knn, umap) = withTemp dir $ \tmpFl -> do
           ]
       cells <- runResourceT $ runConduit $ sourceCells .| mapC f .| sinkVector
       clusters <- map (map readInt . B.split ',') . B.lines <$> B.readFile tmpFl
-      return $ zipWith (\i -> CellCluster $ B.pack $ "C" ++ show i) [1::Int ..] $
+      return $ zipWith (\i x -> CellCluster (B.pack $ "C" ++ show i) x Nothing) [1::Int ..] $
           map (map (cells V.!)) clusters
   where
     seqDepthC = sourceFile (idx^.location) .| linesUnboundedAsciiC .|
@@ -252,7 +253,7 @@ plotClusters :: FilePath
              -> [CellCluster]
              -> IO ()
 plotClusters output input = do
-    let (nms, num_cells) = unzip $ map (\(CellCluster nm cells) ->
+    let (nms, num_cells) = unzip $ map (\(CellCluster nm cells _) ->
             (T.pack $ B.unpack nm, fromIntegral $ length cells)) input
         plt = stackBar $ DF.mkDataFrame ["number of cells"] nms [num_cells]
     clusters <- sampleCells input

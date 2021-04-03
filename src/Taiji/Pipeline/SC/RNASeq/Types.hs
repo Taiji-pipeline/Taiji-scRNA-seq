@@ -8,6 +8,7 @@ module Taiji.Pipeline.SC.RNASeq.Types
     ( SCRNASeq(..)
     , SCRNASeqConfig(..)
     , qcDir
+    , figDir
     , tempDir
 
     , QC(..)
@@ -18,6 +19,7 @@ module Taiji.Pipeline.SC.RNASeq.Types
     , qcFileHeader
     ) where
 
+import Numeric.Natural (Natural)
 import Bio.Data.Experiment.Types
 import Bio.Data.Experiment.Replicate
 import           Bio.Pipeline.Utils
@@ -43,8 +45,8 @@ class SCRNASeqConfig config where
     _scrnaseq_output_dir :: config -> Directory
     _scrnaseq_batch_info :: config -> Maybe FilePath
     _scrnaseq_tmp_dir :: config -> Maybe FilePath
-    _scrnaseq_cell_barcode_length :: config -> Maybe Int
-    _scrnaseq_molecular_barcode_length :: config -> Maybe Int
+    _scrnaseq_cell_barcode_length :: config -> Maybe Natural
+    _scrnaseq_molecular_barcode_length :: config -> Maybe Natural
     _scrnaseq_star_index :: config -> FilePath
     _scrnaseq_genome_fasta :: config -> Maybe FilePath
     _scrnaseq_annotation :: config -> FilePath
@@ -55,6 +57,9 @@ class SCRNASeqConfig config where
 
 qcDir :: SCRNASeqConfig config => ReaderT config IO FilePath
 qcDir = asks _scrnaseq_output_dir >>= getPath . (<> "/QC/")
+
+figDir :: SCRNASeqConfig config => ReaderT config IO FilePath
+figDir = asks _scrnaseq_output_dir >>= getPath . (<> "/Figure/")
 
 tempDir :: SCRNASeqConfig config => ReaderT config IO FilePath
 tempDir = asks _scrnaseq_output_dir >>= getPath . (<> "/Temporary/")

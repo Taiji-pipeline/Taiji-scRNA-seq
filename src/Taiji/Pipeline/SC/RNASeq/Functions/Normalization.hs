@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -23,6 +24,7 @@ import qualified Data.Text as T
 import Shelly (shelly, run_)
 import Numeric.Sampling (psample)
 import System.Random.MWC
+import Language.Javascript.JMacro
 import Data.Conduit.List (chunksOf)
 
 import qualified Data.Matrix.Static.Dense as D
@@ -33,22 +35,25 @@ import qualified Data.Matrix.Static.LinearAlgebra as L
 import Data.Singletons.Prelude hiding ((@@))
 import Flat (flat, unflat)
 
-import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..), SCRNASeq)
+import           Taiji.Pipeline.SC.RNASeq.Types (figDir, SCRNASeqConfig(..), SCRNASeq)
 import Taiji.Prelude
 import Taiji.Utils
+import Taiji.Utils.Plot
+import Taiji.Utils.Plot.ECharts
 
 fitNB :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
       => SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)
-      -> ReaderT config IO (SCRNASeq S FilePath)
+      -> ReaderT config IO (SCRNASeq S (FilePath, FilePath))
 fitNB input = do
     dir <- asks ((<> "/Quantification/Normalization/") . _scrnaseq_output_dir) >>= getPath
     let output = printf "%s/%s_rep%d_model_parameters.txt" dir
+            (T.unpack $ input^.eid) (input^.replicates._1)
+        outputGeneMean = printf "%s/%s_rep%d_log_gene_mean.txt" dir
             (T.unpack $ input^.eid) (input^.replicates._1)
     input & replicates.traversed.files %%~ liftIO . ( \(r, fl) -> withTempDir Nothing $ \tmpdir -> do
         let tmpMat = tmpdir <> "/tmp.mat.gz"
             tmpRow = tmpdir <> "/row.txt"
             tmpCol = tmpdir <> "/col.txt"
-            tmpGeneMean = tmpdir <> "/geneMean.txt"
         gen <- create
 
         cellByGene <- mkSpMatrix readInt $ fl^.location
@@ -58,14 +63,14 @@ fitNB input = do
             nCell = 30000
 
         -- Compute geometric mean for each gene
-        geneMean <- U.map (\x -> exp (x / fromIntegral totalCell) - 1) <$>
+        logGeneMean <- U.map (\x -> logBase 10 $ exp (x / fromIntegral totalCell) - 1) <$>
             colSum (fmap (\x -> log $ fromIntegral x + 1) cellByGene)
         (col, mat) <- if totalGene > nGene
             then do
-                geneIdx <- kdeSampling gen nGene geneMean
-                return (map (geneMean U.!) geneIdx, selectCols geneIdx cellByGene)
+                geneIdx <- kdeSampling gen nGene logGeneMean
+                return (map (logGeneMean U.!) geneIdx, selectCols geneIdx cellByGene)
             else
-                return (U.toList geneMean, cellByGene)
+                return (U.toList logGeneMean, cellByGene)
 
         -- Compute log10(totalReads) for each cell
         cellReads <- runResourceT $ runConduit $ streamRows cellByGene .|
@@ -80,18 +85,18 @@ fitNB input = do
 
         B.writeFile tmpRow $ B.unlines $ map toShortest row
         B.writeFile tmpCol $ B.unlines $ map toShortest col
-        B.writeFile tmpGeneMean $ B.unlines $ map toShortest $ U.toList geneMean
+        B.writeFile outputGeneMean $ B.unlines $ map toShortest $ U.toList logGeneMean
         saveMatrix tmpMat (fromJust . packDecimal) cellByGene'
-        shelly $ run_ "taiji-utils" $ map T.pack ["normalize", tmpMat, tmpCol, tmpRow, tmpGeneMean, output]
-        return output
+        shelly $ run_ "taiji-utils" $ map T.pack ["new_normalize", tmpMat, tmpCol, tmpRow, outputGeneMean, output]
+        return (output, outputGeneMean)
         )
 
 normalization :: SCRNASeqConfig config
-              => SCRNASeq S (FilePath, (Int, Int), File tags 'Other)
+              => SCRNASeq S ((FilePath, FilePath), (Int, Int), File tags 'Other)
               -> ReaderT config IO (SCRNASeq S [(Int, FilePath, FilePath)])
 normalization input = do
     dir <- asks ((<> "/Quantification/Normalization/") . _scrnaseq_output_dir) >>= getPath
-    input & replicates.traversed.files %%~ liftIO . ( \(params, (i,j), fl) -> do
+    input & replicates.traversed.files %%~ liftIO . ( \((params, _), (i,j), fl) -> do
         [beta_0, beta_1, alpha] <- map (SV.fromList . map readDouble . B.words) . B.lines <$>
             B.readFile params
         mat <- mkSpMatrix readDouble $ fl^.location
@@ -142,6 +147,7 @@ readSparseMatrixChunk mat s e size = streamRows mat .| (dropC s >> takeC n) .| c
     n = e - s
 {-# INLINE readSparseMatrixChunk #-}
 
+-- | mu
 expectedCount ::(SingI c, SingI g) 
               => Matrix 1 g Double   -- ^ beta_0
               -> Matrix 1 g Double   -- ^ beta_1
@@ -150,6 +156,7 @@ expectedCount ::(SingI c, SingI g)
 expectedCount beta0 beta1 lg_m = D.map exp $ (ones @@ beta0) + (lg_m @@ beta1)
 {-# INLINE expectedCount #-}
 
+-- | sigma
 expectedStd :: (SingI c, SingI g)
             => Matrix 1 g Double   -- ^ alpha
             -> Matrix c g Double
@@ -177,14 +184,43 @@ kdeSampling gen n xs = fromJust <$>
 selectFeatures :: SCRNASeqConfig config
                => Int   -- ^ Number of features
                -> ( Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other))
-                  , [SCRNASeq S [(Int, FilePath, FilePath)]] )
+                  , [SCRNASeq S [(Int, FilePath, FilePath)]]
+                  , Maybe (SCRNASeq S (FilePath, FilePath)) )
                -> ReaderT config IO [Int]
-selectFeatures n (Just input1, input2) = liftIO $ do
-    mat <- mkSpMatrix id $ input1^.replicates._2.files._2.location
-    mv <- fmap U.toList $
-        meanVarC (input2^..folded.replicates._2.files.folded._3) (_num_row mat) (_num_col mat)
-    genes <- fmap (map (head . words) . lines) $ readFile $ input1^.replicates._2.files._1.location
-    return $ map fst $ take n $ sortBy (flip (comparing snd)) $ zip [0..] $ map snd mv
+selectFeatures n (Just input1, input2, Just input3) = do
+    dir <- figDir
+    let output = dir <> "/variable_gene_selection.html"
+    liftIO $ do
+        mat <- mkSpMatrix id $ input1^.replicates._2.files._2.location
+        mv <- fmap U.toList $
+            meanVarC (input2^..folded.replicates._2.files.folded._3) (_num_row mat) (_num_col mat)
+        genes <- fmap (map (head . words) . lines) $ readFile $ input1^.replicates._2.files._1.location
+
+        gm <- fmap (map ((\x -> 10**x) . readDouble) . B.lines) $ B.readFile $ input3^.replicates._2.files._2
+        let plt = toolbox >+> attr >+> scatter' [("", zip gm $ map snd mv)]
+            attr = [jmacroE| {
+                grid: {
+                    height: 300,
+                    width: 300
+                },
+                xAxis: {
+                    type: "log",
+                    axisTick: {show:true},
+                    axisLabel: {show:true},
+                    splitLine: {show:true},
+                    name: "dim1"
+                },
+                yAxis: {
+                    type: "log",
+                    axisTick: {show:true},
+                    axisLabel: {show:true},
+                    splitLine: {show:true},
+                    name: "dim2"
+                } }|]
+ 
+        savePlots output [] [plt]
+
+        return $ map fst $ take n $ sortBy (flip (comparing snd)) $ zip [0..] $ map snd mv
 selectFeatures _ _ = return []
 
 meanVarC :: [FilePath] -> Int -> Int -> IO (U.Vector (Double, Double))
