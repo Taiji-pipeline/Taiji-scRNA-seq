@@ -44,10 +44,10 @@ combineMatrices :: SCRNASeqConfig config
                         , File '[ColumnName, Gzip] 'Tsv
                         , File '[Gzip] 'MatrixMarket ) 
                         ( File '[ColumnName, Gzip] 'Tsv
-                        , File '[Gzip] 'Other ) 
+                        , File '[Gzip] 'Matrix) 
                    )]
                 -> ReaderT config IO
-                    (Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other )))
+                    (Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Matrix )))
 combineMatrices [] = return Nothing
 combineMatrices inputs = do
     dir <- asks _scrnaseq_output_dir >>= getPath . (<> (asDir "/Cluster/"))
@@ -91,7 +91,7 @@ combineMatrices inputs = do
 old_spectral :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
          => FilePath  -- ^ directory
          -> Maybe Int  -- ^ seed
-         -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)
+         -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Matrix)
          -> ReaderT config IO (SCRNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv))
 old_spectral prefix seed input = do
     dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
@@ -301,11 +301,11 @@ composition clusters = DF.mkDataFrame rownames colnames $
 -- | Extract cluster submatrix
 segregateCells :: SCRNASeqConfig config
                => FilePath   -- ^ Dir
-               -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
+               -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Matrix)
                -> File tag' 'Other   -- Clusters
                -> ReaderT config IO 
                   ( File '[ColumnName, Gzip] 'Tsv
-                  , [SCRNASeq S (File '[Gzip] 'Other)] )
+                  , [SCRNASeq S (File '[Gzip] 'Matrix)] )
 segregateCells prefix matFl clFl = do
     dir <- asks _scrnaseq_output_dir >>= getPath . (<> (asDir prefix))
     liftIO $ do
@@ -326,7 +326,7 @@ segregateCells prefix matFl clFl = do
 mkExprTable :: SCRNASeqConfig config
             => FilePath
             -> Maybe ( File '[ColumnName, Gzip] 'Tsv
-               , [SCRNASeq S (File '[Gzip] 'Other)] )
+               , [SCRNASeq S (File '[Gzip] 'Matrix)] )
             -> ReaderT config IO (Maybe (FilePath, FilePath, FilePath))
 mkExprTable _ Nothing = return Nothing
 mkExprTable prefix (Just (geneFl, inputs)) = do

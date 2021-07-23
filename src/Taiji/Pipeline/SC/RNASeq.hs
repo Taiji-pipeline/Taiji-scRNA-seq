@@ -16,7 +16,7 @@ builder = do
 
     uNode "Get_Fastq" [| return . getFastq |]
     nodePar "Barcode_Stat" 'getValidBarcode $ return ()
-    nodePar "Demultiplex" 'demultiplex $ return ()
+    nodePar "Demultiplex" 'demultiplex $ nCore .= 3
     path ["Read_Input", "Get_Fastq", "Barcode_Stat", "Demultiplex"]
 
     uNode "Get_Demulti_Fastq" [| \(input, fq) -> return $
@@ -28,7 +28,9 @@ builder = do
         nCore .= 8
         memory .= 50
     nodePar "Filter_Bam" 'filterNameSortBam $ nCore .= 2
-    nodePar "Quantification" 'quantification $ memory .= 8
+    nodePar "Quantification" 'quantification $ do
+        memory .= 8 
+        nCore .= 3
     nodePar "Filter_Cell" 'filterCells $ return ()
     nodePar "Remove_Doublet" 'removeDoublet $ return ()
     path ["Get_Demulti_Fastq", "Make_Index", "Align", "Filter_Bam"
@@ -105,7 +107,7 @@ builder = do
         Nothing -> return Nothing
         Just input -> fmap Just $ mkKNNGraph "/Cluster/" $
             input & replicates.traverse.files %~ return
-        |] $ return ()
+        |] $ nCore .= 4
     path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Batch_Correction", "Merged_Make_KNN"]
 
 --------------------------------------------------------------------------------

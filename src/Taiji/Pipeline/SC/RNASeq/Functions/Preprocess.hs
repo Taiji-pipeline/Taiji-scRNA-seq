@@ -27,6 +27,7 @@ import Data.Either (lefts, rights)
 import qualified Data.ByteString.Char8                as B
 import Language.Javascript.JMacro
 import Control.DeepSeq (force)
+import Data.Conduit.Async (runCConduit, (=$=&))
 
 import           Taiji.Pipeline.SC.RNASeq.Types
 import Taiji.Utils.Plot
@@ -155,9 +156,9 @@ kneePlot output thres input = savePlots output [] [plt']
         | otherwise = ((i+1, x) : (i, x') : acc, (i, x))
 
 demulti :: FilePath -> I.IntMap Int -> Int -> Int -> FilePath -> FilePath -> IO ()
-demulti out bcMap bcLen umiLen fqidxFl fqFl = runResourceT $ runConduit $
-    zipSources (Fq.streamFastqGzip fqidxFl .| mapC getBc) (Fq.streamFastqGzip fqFl) .|
-    concatMapC f .| Fq.sinkFastqGzip out
+demulti out bcMap bcLen umiLen fqidxFl fqFl = runResourceT $ runCConduit $
+    zipSources (Fq.streamFastqGzip fqidxFl .| mapC getBc) (Fq.streamFastqGzip fqFl) =$=&
+    concatMapC f =$=& Fq.sinkFastqGzip out
   where
     getBc x = let bc = dnaToInt $ B.take bcLen $ Fq.fastqSeq x
                   umi = B.take umiLen $ B.drop bcLen $ Fq.fastqSeq x

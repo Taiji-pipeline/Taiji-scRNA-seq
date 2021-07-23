@@ -29,6 +29,7 @@ import qualified Data.HashMap.Strict                  as M
 import           GHC.Generics (Generic)
 import Data.Binary
 import Data.Aeson
+import Control.DeepSeq (NFData)
 
 import Taiji.Prelude
 
@@ -72,6 +73,9 @@ data QC = QC
     , _mitoRate :: Double
     , _doubletScore :: Double
     , _count_table :: M.HashMap Annotation Int }
+    deriving (Eq, Generic)
+
+instance NFData QC
 
 passQC :: QC -> Bool
 passQC QC{..} = _mitoRate <= 0.2 && _uniq_gene >= 200
@@ -85,6 +89,7 @@ data Annotation = Exon
                 | Intergenic
                 deriving (Show, Eq, Ord, Generic)
 
+instance NFData Annotation
 instance Hashable Annotation
 instance FromJSON Annotation
 instance ToJSON Annotation

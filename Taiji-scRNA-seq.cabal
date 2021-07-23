@@ -5,7 +5,7 @@ license:             MIT
 license-file:        LICENSE
 author:              Kai Zhang
 maintainer:          kai@kzhang.org
-copyright:           (c) 2017-2020 Kai Zhang
+copyright:           (c) 2017-2021 Kai Zhang
 category:            Bio
 build-type:          Simple
 extra-source-files:  README.md
@@ -56,6 +56,7 @@ library
                      , IntervalMap
                      , mtl
                      , jmacro
+                     , stm-conduit
                      , sampling
                      , singletons >= 2.5
                      , statistics

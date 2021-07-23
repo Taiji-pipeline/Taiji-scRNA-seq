@@ -20,12 +20,15 @@ import           Data.Conduit.Internal (zipSinks, zipSources)
 import Data.List.Ordered
 import qualified Data.ByteString.Char8                as B
 import           Data.CaseInsensitive                 (original)
+import qualified Data.Vector.Unboxed as U
 import qualified Data.HashMap.Strict                  as M
 import qualified Data.IntMap.Strict as I
 import qualified Data.IntervalMap.Strict              as IM
 import qualified Data.HashSet as S
 import qualified Data.Text                            as T
 import Shelly (shelly, run_)
+import Data.Conduit.Async (runCConduit, (=$=&))
+import Control.DeepSeq (($!!))
 
 import Taiji.Prelude hiding (_cell_barcode)
 import Taiji.Utils
@@ -50,7 +53,7 @@ quantification :: SCRNASeqConfig config
                => SCRNASeq S (File '[NameSorted] 'Bam)
                -> ReaderT config IO ( SCRNASeq S
                   ( ( File '[ColumnName, Gzip] 'Tsv       
-                    , File '[Gzip] 'Other ) -- ^ quantification
+                    , File '[Gzip] 'Matrix ) -- ^ quantification
                     , File '[] 'Tsv  ) )   -- ^ QC
 quantification input = do
     dir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
@@ -70,17 +73,17 @@ quantification input = do
         anno <- readAnnotations anno_f
 
         runResourceT $ runConduit $ yieldMany genes .|
-            mapC (original . geneName) .| unlinesAsciiC .| gzip .| sinkFile idx
+            mapC (\x -> original (geneName x) <> ":" <> geneId x) .|
+            unlinesAsciiC .| gzip .| sinkFile idx
 
         let exons = mkExonTree genes
             outputMat = mapC fst .|
                 sinkRows' (length genes) (fromJust . packDecimal) output
             outputQC = (yield qcFileHeader >> mapC (showQC . snd)) .|
                 unlinesAsciiC .| sinkFile qc
-        _ <- runResourceT $ runConduit $
-            streamBam (bam^.location) .| bamToBedC hdr .|
-            groupOnC (fst . getIndex . fromJust . (^.name)) .|
-            mapMC (quantify exons anno) .| zipSinks outputMat outputQC
+        _ <-  runResourceT $ runCConduit $ streamBam (bam^.location) =$=&
+            ( bamToBedC hdr .| groupOnC (fst . getIndex . fromJust . (^.name)) ) =$=&
+            ( mapMC (quantify exons anno) .| zipSinks outputMat outputQC )
         return ( (location .~ idx $ emptyFile, location .~ output $ emptyFile)
                , location .~ qc $ emptyFile )
         )
@@ -88,11 +91,11 @@ quantification input = do
 filterCells :: SCRNASeqConfig config
             => SCRNASeq S
                   ( ( File '[ColumnName, Gzip] 'Tsv       
-                    , File '[Gzip] 'Other )-- ^ quantification
+                    , File '[Gzip] 'Matrix )-- ^ quantification
                     , File '[] 'Tsv  )  -- ^ QC
             -> ReaderT config IO ( SCRNASeq S
                   ( ( File '[ColumnName, Gzip] 'Tsv       
-                    , File '[Gzip] 'Other )
+                    , File '[Gzip] 'Matrix )
                     , File '[] 'Tsv  ) )
 filterCells input = do
     dir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath
@@ -133,7 +136,7 @@ quantify exons anno input = do
             , _mitoRate = mito
             , _doubletScore = 0
             , _count_table = counts }
-    return ((bc, exonCount), qc)
+    return $!! ((bc, exonCount), qc)
   where
     sink = getZipSink $ (,,) <$> ZipSink lengthC <*>
         ZipSink (countExon exons) <*> ZipSink (countFeat anno)
@@ -212,11 +215,11 @@ countFeat anno = fmap S.size <$> foldlC go M.empty
 
 
 removeDoublet :: SCRNASeqConfig config
-              => SCRNASeq S ( ( File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Other)
+              => SCRNASeq S ( ( File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Matrix)
                             , File '[] 'Tsv  )
               -> ReaderT config IO ( SCRNASeq S
                  ( ( File '[ColumnName, Gzip] 'Tsv       
-                   , File '[Gzip] 'Other ) 
+                   , File '[Gzip] 'Matrix ) 
                  , File '[] 'Tsv  ) )
 removeDoublet input = do
     outdir <- asks ((<> "/Quantification/") . _scrnaseq_output_dir) >>= getPath

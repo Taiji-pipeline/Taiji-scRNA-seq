@@ -10,7 +10,6 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Align
 
 import           Bio.Pipeline
 import           Data.Either                          (fromLeft)
-import System.IO.Temp (withTempFile)
 import qualified Data.Text                            as T
 import Shelly hiding (FilePath)
 
