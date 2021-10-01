@@ -12,6 +12,7 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Spectral
     ( Spectral(..)
     , spectral
     , spectralEmbedC
+    , getNormData
     , getSpectral
     , nystromExtend
     , outputReduced
@@ -21,11 +22,13 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Spectral
 import Data.Matrix.Static.LinearAlgebra
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Text as T
+import qualified Data.Vector as Vec
 import qualified Data.Vector.Storable as V
 import qualified Data.Matrix.Static.Generic as G
 import qualified Data.Matrix.Static.Dense as D
 import qualified Data.Matrix.Static.Sparse as S
 import qualified Data.Matrix.Storable as MS
+import Data.Conduit.Zlib (multiple, ungzip, gzip)
 import Data.Matrix.Dynamic (Dynamic(..), withDyn, fromVector, fromRows)
 import qualified Data.Vector.Unboxed as U
 import Data.Singletons.Prelude hiding ((@@), type (==))
@@ -41,6 +44,39 @@ import Flat (flat, unflat)
 import Taiji.Prelude
 import Taiji.Utils
 import           Taiji.Pipeline.SC.RNASeq.Types (SCRNASeqConfig(..), SCRNASeq)
+
+getNormData :: SCRNASeqConfig config
+            => ( Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Matrix ))
+               , [SCRNASeq S [(Int, FilePath, FilePath)]], [Int] )
+            -> ReaderT config IO (
+                Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File '[Gzip] 'Matrix ))
+                , Maybe (SCRNASeq S (File '[Gzip] 'Matrix)) )
+getNormData (e, [], _) = return (e, Nothing)
+getNormData (e, input, cidx') = do
+    dir <- asks ((<> "/TEST/") . _scrnaseq_output_dir) >>= getPath
+    let output = dir <> "/matrix.txt"
+    r <- fmap Just $ head input & replicates.traversed.files %%~ liftIO . ( \_ -> do
+        let (colnameFl, matFl) = fromJust e ^.replicates._2.files
+        count <- mkSpMatrix id $ matFl^.location
+        row <- runResourceT $ runConduit $ streamRows count .| mapC fst .| sinkList
+        colname <- runResourceT $ runConduit $ sourceFile (colnameFl^.location) .|
+            multiple ungzip .| linesUnboundedAsciiC .| sinkVector
+        let col = B.unwords $ map (colname Vec.!) cidx'
+
+        mat <- fmap (MS.fromBlocks 0 . map return) $ runConduit $
+            yieldMany matFls .| mapMC f .| sinkList
+        B.writeFile output $ B.unlines $ (col:) $ map B.unwords $ zipWith (:) row $
+            map (map toShortest) $ MS.toLists mat
+        return $ location .~ output $ emptyFile
+        )
+    return (e, r)
+  where
+    matFls = input^..folded.replicates._2.files.folded._2
+    f fl = do
+        Dynamic (mat :: Matrix m n Double) <- either (error . show) id . unflat <$> B.readFile fl
+        let r = D.rows mat
+        return $! MS.generate (r, U.length cidx) $ \(i, j) -> mat `D.unsafeIndex` (i, cidx U.! j)
+    cidx = U.fromList cidx'
 
 getSpectral :: SCRNASeqConfig config
             => Int     -- ^ Number of samples
@@ -109,7 +145,7 @@ nystromExtend (input, cidx', Just (fl1, fl2, fl3)) = do
 nystromExtend _ = error ""
 
 outputReduced :: SCRNASeqConfig config
-              => (Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Other)), [FilePath])
+              => (Maybe (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Matrix)), [FilePath])
               -> ReaderT config IO (Maybe (SCRNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv)))
 outputReduced (Just input, matFls) = do
     dir <- asks ((<> "/Spectral/") . _scrnaseq_output_dir) >>= getPath

@@ -13,6 +13,7 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Normalization
     ( fitNB
     , normalization
     , selectFeatures
+    , logNormalize
     ) where 
 
 import qualified Data.ByteString.Char8 as B
@@ -21,6 +22,7 @@ import Bio.Utils.Functions (gaussianKDE)
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Storable as SV
 import qualified Data.Text as T
+import Control.Arrow (second)
 import Shelly (shelly, run_, mkdir_p)
 import Numeric.Sampling (psample)
 import System.Random.MWC
@@ -40,6 +42,21 @@ import Taiji.Prelude
 import Taiji.Utils
 import Taiji.Utils.Plot
 import Taiji.Utils.Plot.ECharts
+
+logNormalize :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
+             => SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Matrix)
+             -> ReaderT config IO (SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Matrix))
+logNormalize input = do
+    dir <- asks ((<> "/Quantification/Normalization/") . _scrnaseq_output_dir) >>= getPath
+    let output = printf "%s/%s_rep%d_log_norm.mat.gz" dir (T.unpack $ input^.eid) (input^.replicates._1)
+    input & replicates.traversed.files %%~ liftIO . ( \(r, fl) -> do
+        fmap (mapRows (second f)) (mkSpMatrix readDouble $ fl^.location) >>=
+            saveMatrix output toShortest
+        return (r, location .~ output $ fl)
+        )
+  where
+    f xs = let s = foldl1' (+) (map snd xs) / 10000
+           in map (second (\x -> x / s)) xs
 
 fitNB :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
       => SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Matrix)

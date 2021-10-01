@@ -8,9 +8,7 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
     ( combineMatrices
     , batchCorrection
     , mkKNNGraph
-    , clustering
-    , computeStability
-    , pickResolution
+    , plotClusters
     , segregateCells
     , mkExprTable
     , old_spectral
@@ -91,7 +89,7 @@ combineMatrices inputs = do
 old_spectral :: (Elem 'Gzip tags ~ 'True, SCRNASeqConfig config)
          => FilePath  -- ^ directory
          -> Maybe Int  -- ^ seed
-         -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Matrix)
+         -> SCRNASeq S (File '[ColumnName, Gzip] 'Tsv, File tags 'Matrix )
          -> ReaderT config IO (SCRNASeq S (File '[] 'Tsv, File '[Gzip] 'Tsv))
 old_spectral prefix seed input = do
     dir <- asks ((<> asDir prefix) . _scrnaseq_output_dir) >>= getPath
@@ -99,15 +97,12 @@ old_spectral prefix seed input = do
             (T.unpack $ input^.eid) (input^.replicates._1)
         rownames = printf "%s/%s_rep%d_rownames.txt" dir
             (T.unpack $ input^.eid) (input^.replicates._1)
-    input & replicates.traversed.files %%~ liftIO . ( \(_, fl) -> withTemp Nothing $ \tmp -> do
+    input & replicates.traversed.files %%~ liftIO . ( \(_, fl) -> do
         sp <- mkSpMatrix readInt $ fl^.location
         _ <- runResourceT $ runConduit $ streamRows sp .| mapC f .| unlinesAsciiC .| sinkFile rownames
-
-        shelly $ run_ "taiji-utils" $ ["normalize", T.pack $ fl^.location, T.pack tmp]
         shelly $ run_ "taiji-utils" $ [ "reduce"
-            , "--distance", "rbf"
-            , "--input-format", "dense"
-            , T.pack tmp, T.pack output ] ++ maybe []
+            , "--distance", "pca"
+            , T.pack $ fl^.location, T.pack output ] ++ maybe []
             (\x -> ["--seed", T.pack $ show x]) seed
         return ( location .~ rownames $ emptyFile, location .~ output $ emptyFile)
         )
@@ -171,99 +166,53 @@ mkKNNGraph prefix input = do
                , location .~ output_umap $ emptyFile )
         )
 
-clustering :: SCRNASeqConfig config
-           => FilePath
-           -> Double
-           -> Optimizer
-           -> SCRNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)
-           -> ReaderT config IO (SCRNASeq S (File '[] 'Other))
-clustering prefix res optimizer input = do
-    tmp <- asks _scrnaseq_tmp_dir
-    dir <- asks ((<> asDir ("/" ++ prefix)) . _scrnaseq_output_dir) >>= getPath
-    let output = printf "%s/%s_rep%d_clusters.bin" dir (T.unpack $ input^.eid)
-            (input^.replicates._1)
-        plotFl = printf "%s/%s_rep%d_clusters.html" dir (T.unpack $ input^.eid)
-            (input^.replicates._1)
-    input & replicates.traversed.files %%~ liftIO . ( \fl -> do
-        cls <- clustering' tmp optimizer res fl
-        encodeFile output cls
-        plotClusters plotFl cls
-        return $ location .~ output $ emptyFile )
-
-clustering' :: Maybe FilePath      -- ^ temp dir
-            -> Optimizer 
-            -> Double  -- ^ Clustering resolution
-            -> (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)
-            -> IO [CellCluster]
-clustering' dir method res (idx, knn, umap) = withTemp dir $ \tmpFl -> do
-      let sourceCells = getZipSource $ (,,) <$>
-              ZipSource (iterateC succ 0) <*>
-              ZipSource seqDepthC <*>
-              ZipSource ( sourceFile (umap^.location) .| linesUnboundedAsciiC .|
-                mapC (map readDouble . B.split '\t') )
-      shelly $ run_ "taiji-utils"
-          [ "clust", T.pack $ knn^.location, T.pack tmpFl
-          , "--res"
-          , T.pack $ show res
-          , "--optimizer"
-          , case method of
-              RBConfiguration -> "RB"
-              CPM -> "CPM"
-          ]
-      cells <- runResourceT $ runConduit $ sourceCells .| mapC f .| sinkVector
-      clusters <- map (map readInt . B.split ',') . B.lines <$> B.readFile tmpFl
-      return $ zipWith (\i x -> CellCluster (B.pack $ "C" ++ show i) x Nothing) [1::Int ..] $
-          map (map (cells V.!)) clusters
+plotClusters :: SCRNASeqConfig config
+             => ( [(Double, (Int, Double, Double))]
+                , [(Double, ([FilePath], FilePath))]
+                , Maybe (SCRNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv)) )
+             -> ReaderT config IO (Maybe (SCRNASeq S (File '[] 'Other)))
+plotClusters (_, _, Nothing) = return Nothing
+plotClusters (params, clFl, Just knn) = do
+    dir <- asks _scrnaseq_output_dir >>= getPath . (<> "/Cluster/")
+    resAuto <- liftIO $ optimalParam (dir <> "/Clustering_parameters.html") params
+    res <- fromMaybe resAuto <$> asks _scrnaseq_cluster_resolution 
+    let clOutput = printf "%s/%s_rep%d_clusters.bin" dir (T.unpack $ knn^.eid)
+            (knn^.replicates._1)
+    fmap Just $ knn & replicates.traversed.files %%~ liftIO . ( \(idx, _, umap) -> do
+        let sourceCells = getZipSource $ (,,) <$>
+                ZipSource (iterateC succ 0) <*>
+                ZipSource (sourceFile (idx^.location) .| linesUnboundedAsciiC .| mapC g) <*>
+                ZipSource ( sourceFile (umap^.location) .|
+                    linesUnboundedAsciiC .|
+                    mapC (map readDouble . B.split '\t') )
+            (perturbed, cl) = fromJust $ lookup res clFl
+        clusters <- decodeFile cl
+        perturbedCls <- mapM decodeFile perturbed
+        let (clNames, repro) = unzip $ zipWith (\i x -> (T.pack $ "C" <> show i, x)) [1::Int ..] $
+                computeReproducibility clusters perturbedCls
+            figRepro = line $ DF.mkDataFrame ["reproducibility"] clNames [repro]
+        cells <- runResourceT $ runConduit $ sourceCells .| mapC f .| sinkVector
+        let cellCluster = zipWith3 (\i x y -> CellCluster (B.pack $ "C" ++ show i) x $ Just y)
+                [1::Int ..] (map (map (cells V.!)) clusters) repro
+        encodeFile clOutput cellCluster
+        let clViz = printf "%s/%s_rep%d_cluster.html" dir (T.unpack $ knn^.eid)
+                (knn^.replicates._1)
+            (nms, num_cells) = unzip $ map (\(CellCluster nm cs _) ->
+                (T.pack $ B.unpack nm, fromIntegral $ length cs)) cellCluster
+            plt = stackBar $ DF.mkDataFrame ["number of cells"] nms [num_cells]
+            compos = composition cellCluster
+        clusters' <- sampleCells cellCluster
+        savePlots clViz [] $ visualizeCluster clusters' ++
+            figRepro : clusterComposition compos : tissueComposition compos : [plt]
+        return $ location .~ clOutput $ emptyFile )
   where
-    seqDepthC = sourceFile (idx^.location) .| linesUnboundedAsciiC .|
-        mapC ((\[a,b] -> (a,b)) . B.split '\t')
     f (i, (bc, dep), [d1,d2]) = Cell i (d1,d2) bc $ readInt dep
     f _ = error "formatting error"
-{-# INLINE clustering' #-}
+    g x = case B.split '\t' x of
+        [a, b] -> (a, b)
+        [a] -> (a, "0")
+        _ -> error "formatting error"
 
-pickResolution :: [(Double, Double, Double)]
-               -> Double
-pickResolution xs = case filter (\x -> x^._3 > 0.8) (take 5 xs') of
-    [] -> head xs' ^. _1
-    x -> maximumBy (comparing (^._2)) x ^. _1
-  where
-    xs' = sortBy (flip (comparing (^._3))) xs
-
-computeStability :: SCRNASeqConfig config
-                 => (Double, SCRNASeq S (File '[] 'Tsv, File '[] 'Other, File '[] Tsv))
-                 -> ReaderT config IO (Double, Double, Double)
-computeStability (res, input) = do
-    tmp <- asks _scrnaseq_tmp_dir
-    optimizer <- asks _scrnaseq_cluster_optimizer 
-    let knn = input^.replicates.traversed.files._2.location
-    liftIO $ withTemp tmp $ \tmpFl -> do
-        shelly $ run_ "taiji-utils"
-            [ "clust", T.pack knn, T.pack tmpFl
-            , "--stability"
-            , "--res", T.pack $ show res
-            , "--optimizer"
-            , case optimizer of
-                RBConfiguration -> "RB"
-                CPM -> "CPM"
-            ]
-        [num, st] <- words . head . lines <$> readFile tmpFl
-        return (res, read num, read st)
-
-plotClusters :: FilePath
-             -> [CellCluster]
-             -> IO ()
-plotClusters output input = do
-    let (nms, num_cells) = unzip $ map (\(CellCluster nm cells _) ->
-            (T.pack $ B.unpack nm, fromIntegral $ length cells)) input
-        plt = stackBar $ DF.mkDataFrame ["number of cells"] nms [num_cells]
-    clusters <- sampleCells input
-    case visualizeCluster clusters of
-        [p] -> savePlots output [] $ [p, plt]
-        [p1,p2] -> do
-            let compos = composition input
-            savePlots output [] $ [p1, p2, plt,
-                clusterComposition compos, tissueComposition compos]
-        _ -> undefined
 
 -- | Compute the normalized tissue composition for each cluster.
 tissueComposition :: DF.DataFrame Int -> EChart

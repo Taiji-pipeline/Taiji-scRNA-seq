@@ -5,6 +5,7 @@ module Taiji.Pipeline.SC.RNASeq ( builder) where
 
 import           Control.Workflow
 import qualified Data.Text as T
+import Data.List.Ordered (nubSort)
 
 import Taiji.Prelude
 import           Taiji.Utils
@@ -50,6 +51,12 @@ builder = do
 --------------------------------------------------------------------------------
 -- Normalization
 --------------------------------------------------------------------------------
+    node "Merged_Normalization" [| \case
+        Nothing -> return Nothing
+        Just input -> Just <$> logNormalize input
+        |] $ return ()
+    path ["Merge_Matrix", "Merged_Normalization"]
+{-
     node "Merged_Fit_NB" [| \case
         Nothing -> return Nothing
         Just input -> Just <$> fitNB input
@@ -70,17 +77,29 @@ builder = do
         _ -> return []
         |]
     nodePar "Merged_Normalization" 'normalization $ return ()
-    node "Merged_Feature_Selection" [| selectFeatures 2000 |] $ return ()
+    node "Merged_Feature_Selection" [| selectFeatures 3000 |] $ return ()
     path ["Merge_Matrix", "Merged_Fit_NB"]
     ["Merge_Matrix", "Merged_Fit_NB"] ~> "Merged_Normalization_Prep"
     path ["Merged_Normalization_Prep", "Merged_Normalization"]
     ["Merge_Matrix", "Merged_Normalization", "Merged_Fit_NB"] ~> "Merged_Feature_Selection"
+-}
+
+--------------------------------------------------------------------------------
+-- TEST
+--------------------------------------------------------------------------------
+    node "Merged_Reduce_Dims" [| \case
+        Just input -> do
+            let prefix = "/TEST/"
+            fmap Just $ old_spectral prefix Nothing input
+        _ -> return Nothing
+        |] $ return ()
+    ["Merged_Normalization"] ~> "Merged_Reduce_Dims"
 
 
 --------------------------------------------------------------------------------
 -- 
 --------------------------------------------------------------------------------
-    {-
+{-
     node "Merged_Spectral_Sample" [| getSpectral 20000 |] $ return ()
     uNode "Merged_Spectral_Nystrom_Prep" [| \(a,b,c) -> 
         return $ zip3 a (repeat b) $ repeat c |]
@@ -89,16 +108,10 @@ builder = do
     ["Merged_Normalization", "Merged_Feature_Selection", "Merged_Spectral_Sample"] ~> "Merged_Spectral_Nystrom_Prep"
     path ["Merged_Spectral_Nystrom_Prep", "Merged_Spectral_Nystrom"]
 
-    node "Merged_Reduce_Dimension" 'outputReduced $ return ()
-    ["Merge_Matrix", "Merged_Spectral_Nystrom"] ~> "Merged_Reduce_Dimension"
+    node "Merged_Reduce_Dims" 'outputReduced $ return ()
+    ["Merge_Matrix", "Merged_Spectral_Nystrom"] ~> "Merged_Reduce_Dims"
     -}
 
-    node "Merged_Reduce_Dimension" [| \case
-        Nothing -> return Nothing
-        Just input -> do
-            let prefix = "/Cluster/"
-            fmap Just $ old_spectral prefix Nothing input
-        |] $ return ()
     node "Merged_Batch_Correction" [| \case
         Nothing -> return Nothing
         Just input -> Just <$> batchCorrection "/Cluster/" input
@@ -108,45 +121,41 @@ builder = do
         Just input -> fmap Just $ mkKNNGraph "/Cluster/" $
             input & replicates.traverse.files %~ return
         |] $ nCore .= 4
-    path ["Merge_Matrix", "Merged_Reduce_Dimension", "Merged_Batch_Correction", "Merged_Make_KNN"]
+    path ["Merged_Reduce_Dims", "Merged_Batch_Correction", "Merged_Make_KNN"]
 
 --------------------------------------------------------------------------------
 -- Selecting parameter
 --------------------------------------------------------------------------------
     uNode "Merged_Param_Search_Prep" [| \case
-        (Just spectral, Just knn) -> do
-            res <- asks _scrnaseq_cluster_resolution_list
+        Just knn -> do
+            ress <- asks _scrnaseq_cluster_resolution_list
+            res <- maybe [] return <$> asks _scrnaseq_cluster_resolution
             optimizer <- asks _scrnaseq_cluster_optimizer 
-            return $ flip map res $ \r ->
+            return $ flip map (nubSort $ res <> ress) $ \r ->
                 ( optimizer, r
-                , spectral^.replicates._2.files._2.location
                 , knn^.replicates._2.files._2.location )
         _ -> return []
         |]
-    ["Merged_Reduce_Dimension", "Merged_Make_KNN"] ~> "Merged_Param_Search_Prep"
-    nodePar "Merged_Param_Search" [| \(optimizer, r, spectral, knn) -> undefined 
-        --res <- liftIO $ evalClusters optimizer r spectral knn
-        --return (r, res)
+    nodePar "Merged_Param_Search" [| \(optimizer, r, knn) -> do
+        dir <- asks _scrnaseq_output_dir >>= getPath . (<> asDir ("/Cluster/Params/" <> show r))
+        res <- liftIO $ evalClusters dir optimizer r knn
+        return (r, res)
         |] $ return ()
-    path ["Merged_Param_Search_Prep", "Merged_Param_Search"]
+    path ["Merged_Make_KNN", "Merged_Param_Search_Prep", "Merged_Param_Search"]
 
-    node "Merged_Get_Param" [| \(knn, res) -> case knn of
-        Nothing -> return Nothing
-        Just knn' -> do
-            dir <- asks _scrnaseq_output_dir >>= getPath . (<> "/Figure/")
-            p <- liftIO $ optimalParam (dir <> "Clustering_parameters.html") res
-            asks _scrnaseq_cluster_resolution >>= \case
-                Nothing -> return $ Just (p, knn')
-                Just p' -> return $ Just (p', knn')
+
+    uNode "Merged_Cluster_Metric_Prep" [| \(spec, x) -> case spec of
+        Nothing -> return []
+        Just fl -> return $ flip map x $ \(r, y) -> (r, y, fl^.replicates._2.files._2.location)
+        |]
+    nodePar "Merged_Cluster_Metric" [| \(res, cl, spec) -> do
+        r <- liftIO $ computeClusterMetrics cl spec
+        return (res, r)
         |] $ return ()
-    ["Merged_Make_KNN", "Merged_Param_Search"] ~> "Merged_Get_Param"
-    node "Merged_Cluster" [| \case
-        Nothing -> return Nothing
-        Just (res, input) -> do
-            optimizer <- asks _scrnaseq_cluster_optimizer 
-            Just <$> clustering "/Cluster/" res optimizer input
-        |] $ return ()
-    path ["Merged_Get_Param", "Merged_Cluster"]
+    node "Merged_Cluster" 'plotClusters $ return ()
+    ["Merged_Reduce_Dims", "Merged_Param_Search"] ~> "Merged_Cluster_Metric_Prep"
+    path ["Merged_Cluster_Metric_Prep", "Merged_Cluster_Metric"]
+    ["Merged_Cluster_Metric", "Merged_Param_Search", "Merged_Make_KNN"] ~> "Merged_Cluster"
 
     node "Make_Cluster_Matrix" [| \case
         (Just mat, Just cl) -> fmap Just $

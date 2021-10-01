@@ -20,7 +20,6 @@ import           Data.Conduit.Internal (zipSinks, zipSources)
 import Data.List.Ordered
 import qualified Data.ByteString.Char8                as B
 import           Data.CaseInsensitive                 (original)
-import qualified Data.Vector.Unboxed as U
 import qualified Data.HashMap.Strict                  as M
 import qualified Data.IntMap.Strict as I
 import qualified Data.IntervalMap.Strict              as IM
@@ -73,7 +72,7 @@ quantification input = do
         anno <- readAnnotations anno_f
 
         runResourceT $ runConduit $ yieldMany genes .|
-            mapC (\x -> original (geneName x) <> ":" <> geneId x) .|
+            mapC (\x -> geneId x <> ":" <> original (geneName x)) .|
             unlinesAsciiC .| gzip .| sinkFile idx
 
         let exons = mkExonTree genes
@@ -146,7 +145,7 @@ countExon :: Monad m
           => ExonTree
           -> ConduitT BED o m (Row Int)
 countExon exons = do
-    cellBc <- fst . getIndex . fromJust . (^.name) . fromJust <$> peekC
+    cellBc <- fst . getIndex . fromJust . (^.name) . fromMaybe (error "empty input") <$> peekC
     geneCount <- concatMapC count .| foldlC reduce I.empty
     return (cellBc, I.toList $ fmap M.size geneCount)
   where
@@ -183,8 +182,8 @@ readAnnotations input = do
              | otherwise = []
         rRNA | ty == "rRNA" = [Ribosomal]
              | otherwise = []
-        ty = B.init $ B.drop 2 $ fromJust $ lookup "gene_type" $
-            map (B.break isSpace . strip) $ B.split ';' anno
+        ty = B.init $ B.drop 2 $ fromMaybe "unk" $
+            lookup "gene_type" $ map (B.break isSpace . strip) $ B.split ';' anno
         [chr,_,nm,start,end,_,_,_,anno] = B.split '\t' l
         strip = fst . B.spanEnd isSpace . B.dropWhile isSpace
         isSpace = (== ' ')
