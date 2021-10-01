@@ -40,7 +40,7 @@ readInput :: SCRNASeqConfig config
           => () -> ReaderT config IO [RAWInput]
 readInput _ = do
     input <- asks _scrnaseq_input 
-    liftIO $ mkInputReader input "scRNA-seq" SCRNASeq
+    liftIO $ mkInputReader input "scRNA-seq" (\_ x -> SCRNASeq x)
 
 getFastq :: [RAWInput]
          -> [SCRNASeq S (File '[Gzip] 'Fastq, File '[Gzip] 'Fastq)]
