@@ -14,7 +14,7 @@ module Taiji.Pipeline.SC.RNASeq.Functions.Clustering
     , old_spectral
     ) where 
 
-import Data.Singletons.Prelude (Elem)
+import Data.List.Singletons (Elem)
 import Data.Conduit.Zlib (multiple, ungzip, gzip)
 import qualified Data.ByteString.Char8 as B
 import Data.List.Ordered (nubSort)

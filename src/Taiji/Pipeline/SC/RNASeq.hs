@@ -13,31 +13,31 @@ import           Taiji.Pipeline.SC.RNASeq.Functions
 
 builder :: Builder ()
 builder = do
-    node "Read_Input" 'readInput $ return ()
+    node "Read_Input" [| readInput |] $ return ()
 
     uNode "Get_Fastq" [| return . getFastq |]
-    nodePar "Barcode_Stat" 'getValidBarcode $ return ()
-    nodePar "Demultiplex" 'demultiplex $ nCore .= 3
+    nodePar "Barcode_Stat" [| getValidBarcode |] $ return ()
+    nodePar "Demultiplex" [| demultiplex |] $ nCore .= 3
     path ["Read_Input", "Get_Fastq", "Barcode_Stat", "Demultiplex"]
 
     uNode "Get_Demulti_Fastq" [| \(input, fq) -> return $
         getDemultiplexedFastq input ++ fq |]
     ["Read_Input", "Demultiplex"] ~> "Get_Demulti_Fastq"
 
-    node "Make_Index" 'mkIndex $ return ()
-    nodePar "Align" 'tagAlign $ do
+    node "Make_Index" [| mkIndex |] $ return ()
+    nodePar "Align" [| tagAlign |] $ do
         nCore .= 8
         memory .= 50
-    nodePar "Filter_Bam" 'filterNameSortBam $ nCore .= 2
-    nodePar "Quantification" 'quantification $ do
+    nodePar "Filter_Bam" [| filterNameSortBam |] $ nCore .= 2
+    nodePar "Quantification" [| quantification |] $ do
         memory .= 8 
         nCore .= 3
-    nodePar "Filter_Cell" 'filterCells $ return ()
-    nodePar "Remove_Doublet" 'removeDoublet $ return ()
+    nodePar "Filter_Cell" [| filterCells |] $ return ()
+    nodePar "Remove_Doublet" [| removeDoublet |] $ return ()
     path ["Get_Demulti_Fastq", "Make_Index", "Align", "Filter_Bam"
         , "Quantification", "Filter_Cell", "Remove_Doublet"]
 
-    node "QC" 'plotQC $ return ()
+    node "QC" [| plotQC |] $ return ()
     ["Quantification"] ~> "QC"
 
     node "Merge_Matrix" [| \(inputs, mats) -> do
@@ -152,7 +152,7 @@ builder = do
         r <- liftIO $ computeClusterMetrics cl spec
         return (res, r)
         |] $ return ()
-    node "Merged_Cluster" 'plotClusters $ return ()
+    node "Merged_Cluster" [| plotClusters |] $ return ()
     ["Merged_Reduce_Dims", "Merged_Param_Search"] ~> "Merged_Cluster_Metric_Prep"
     path ["Merged_Cluster_Metric_Prep", "Merged_Cluster_Metric"]
     ["Merged_Cluster_Metric", "Merged_Param_Search", "Merged_Make_KNN"] ~> "Merged_Cluster"

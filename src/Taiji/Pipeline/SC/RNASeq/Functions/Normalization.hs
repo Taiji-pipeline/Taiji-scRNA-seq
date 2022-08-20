@@ -34,7 +34,7 @@ import qualified Data.Matrix.Static.Sparse as S
 import Data.Matrix.Dynamic (fromTriplet, withDyn, Dynamic(..))
 import Data.Matrix.Static.LinearAlgebra hiding (colSum)
 import qualified Data.Matrix.Static.LinearAlgebra as L
-import Data.Singletons.Prelude hiding ((@@))
+import Prelude.Singletons hiding ((@@))
 import Flat (flat, unflat)
 
 import           Taiji.Pipeline.SC.RNASeq.Types (figDir, SCRNASeqConfig(..), SCRNASeq)

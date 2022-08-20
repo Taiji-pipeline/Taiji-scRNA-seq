@@ -31,12 +31,12 @@ import qualified Data.Matrix.Storable as MS
 import Data.Conduit.Zlib (multiple, ungzip, gzip)
 import Data.Matrix.Dynamic (Dynamic(..), withDyn, fromVector, fromRows)
 import qualified Data.Vector.Unboxed as U
-import Data.Singletons.Prelude hiding ((@@), type (==))
+import Prelude.Singletons hiding ((@@), type (==))
+import GHC.TypeLits.Singletons
+import Data.Singletons.Decide (decideEquality)
 import Conduit
 import Data.Conduit.Zlib (gzip)
 import Data.Type.Equality
-import Data.Singletons.TypeLits
-import Data.Singletons.Decide (decideEquality)
 import Numeric.Sampling (sample)
 import System.Random.MWC
 import Flat (flat, unflat)
